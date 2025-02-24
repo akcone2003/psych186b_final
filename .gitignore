@@ -1,5 +1,0 @@
-__pycache__/
-*.pyc
-data/battle_data.csv
-models/*.pt
-visualizations/*.png
