@@ -1,9 +1,9 @@
 """
-Main module for Battlefield Strategy Simulation
+Main module for Enhanced Battlefield Strategy Simulation
 
 This script provides multiple interfaces for running the battlefield simulation:
 1. Command-line interface for running simulations, training models, and using the battle advisor
-2. GUI mode for interactive use
+2. GUI mode for interactive use (default)
 3. Full pipeline mode that runs all steps in sequence
 
 When run directly without arguments, it will launch the GUI by default.
@@ -13,9 +13,19 @@ import os
 import sys
 import time
 
-from src.battlefield_env import run_simulation
-from src.lstm_model import main as train_model
-from src.battle_strategy import battle_advisor
+# Try importing from both module styles to be flexible
+try:
+    # Try importing directly (if files are in the root directory)
+    from battlefield_env import run_simulation
+    from lstm_model import main as train_model
+    from battle_strategy import battle_advisor
+    from battlefield_gui import BattlefieldGUI
+except ImportError:
+    # Fall back to src/ directory structure (original setup)
+    from src.battlefield_env import run_simulation
+    from src.lstm_model import main as train_model
+    from src.battle_strategy import battle_advisor
+    from src.battlefield_gui import BattlefieldGUI
 
 
 def main():
@@ -27,10 +37,12 @@ def main():
     
     # Simulation parser
     sim_parser = subparsers.add_parser('simulate', help='Run battle simulations')
-    sim_parser.add_argument('--battles', type=int, default=50, 
+    sim_parser.add_argument('--battles', type=int, default=10, 
                             help='Number of battles to simulate')
     sim_parser.add_argument('--steps', type=int, default=30,
                             help='Maximum steps per battle')
+    sim_parser.add_argument('--render', action='store_true',
+                            help='Render the battles')
     
     # Training parser
     train_parser = subparsers.add_parser('train', help='Train LSTM model')
@@ -57,7 +69,7 @@ def main():
     # Execute appropriate command
     if args.command == 'simulate':
         print(f"Running simulation with {args.battles} battles, {args.steps} max steps each")
-        run_simulation(num_battles=args.battles, timesteps=args.steps)
+        run_simulation(num_battles=args.battles, max_steps=args.steps, render_final=args.render)
         
     elif args.command == 'train':
         # Check if data file exists
@@ -92,15 +104,14 @@ def main():
 
 def ensure_directories_exist():
     """Make sure all required directories exist"""
-    directories = ['data', 'models', 'visualizations', 'src']
+    directories = ['data', 'models', 'visualizations']
     for directory in directories:
         os.makedirs(directory, exist_ok=True)
 
 
 def launch_gui():
-    """Launch the GUI interface"""
+    """Launch the GUI interface using your battlefield_gui.py"""
     try:
-        from src.battlefield_gui import BattlefieldGUI
         import tkinter as tk
         
         print("Launching GUI interface...")
@@ -110,6 +121,10 @@ def launch_gui():
         print(f"Error: {e}")
         print("GUI requirements not met. Please install tkinter and matplotlib.")
         print("You can run in command-line mode with: python main.py simulate")
+    except Exception as e:
+        print(f"Error launching GUI: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def run_full_pipeline():
@@ -120,29 +135,28 @@ def run_full_pipeline():
     
     # Step 1: Run simulation to generate data
     print("\n[STEP 1/3] Running battle simulations to generate training data...")
-    num_battles = 20
-    max_steps = 25
+    num_battles = 10
+    max_steps = 30
     print(f"Generating {num_battles} battles with max {max_steps} steps each")
-    run_simulation(num_battles=num_battles, timesteps=max_steps)
+    run_simulation(num_battles=num_battles, max_steps=max_steps, render_final=True)
     
     # Wait a moment to ensure data is saved
     time.sleep(2)
     
     # Step 2: Train model on generated data
     print("\n[STEP 2/3] Training LSTM model on battle data...")
-    if not os.path.exists("data/battle_data.csv"):
-        emergency_files = [f for f in os.listdir('data') if f.startswith('battle_data_emergency_') and f.endswith('.csv')]
-        if emergency_files:
-            latest_file = sorted(emergency_files, reverse=True)[0]
-            print(f"Using emergency backup file: {latest_file}")
-            # Rename to standard filename
-            os.rename(f"data/{latest_file}", "data/battle_data.csv")
-        else:
-            print("Error: No battle data found. Please check simulation output.")
-            return
-
-    train_model()
+    # Find the latest data file
+    data_files = [f for f in os.listdir('data') if f.startswith('battle_data') and f.endswith('.csv')]
     
+    if data_files:
+        latest_file = sorted(data_files, reverse=True)[0]
+        data_path = os.path.join('data', latest_file)
+        print(f"Using data file: {data_path}")
+        train_model()
+    else:
+        print("Error: No battle data found. Please check simulation output.")
+        return
+
     # Wait a moment to ensure model is saved
     time.sleep(2)
     

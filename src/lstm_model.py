@@ -62,6 +62,8 @@ def find_latest_data_file():
     return f"data/{latest_file}"
 
 
+# Update the load_and_preprocess_data function to handle the enhanced battle data
+
 def load_and_preprocess_data(filepath, test_size=0.2, random_state=42):
     """Load and preprocess battle data for training"""
     try:
@@ -73,9 +75,66 @@ def load_and_preprocess_data(filepath, test_size=0.2, random_state=42):
         print(f"First few rows:\n{df.head()}")
         print(f"Data types:\n{df.dtypes}")
         
+        # Filter only completed battles
+        final_steps = df.groupby('source_file')['Step'].max().reset_index()
+        final_states = pd.merge(df, final_steps, on=['source_file', 'Step'])
+        
+        # Identify target column
+        if 'Result' in df.columns:
+            result_col = 'Result'
+        else:
+            # Try to find another column that might contain the result
+            possible_cols = ['result', 'battle_result', 'outcome']
+            for col in possible_cols:
+                if col in df.columns:
+                    result_col = col
+                    break
+            else:
+                raise ValueError("Could not find result column in dataset")
+        
+        # Convert result to binary (1 for victory, 0 for others)
+        final_states['outcome_binary'] = final_states[result_col].apply(
+            lambda x: 1 if x == 'victory' else 0
+        )
+        
+        # Select features
+        # Focus on unit positions, actions, and enemy positions
+        feature_cols = []
+        
+        # Get all unit position columns
+        for prefix in ['F', 'E']:
+            for i in range(5):  # Up to 5 units per side
+                for suffix in ['X', 'Y', 'HP', 'Type']:
+                    col = f"{prefix}{i}_{suffix}"
+                    if col in final_states.columns:
+                        feature_cols.append(col)
+        
+        # Add action columns for friendly units
+        for i in range(3):  # Up to 3 friendly units
+            action_col = f"F{i}_Action"
+            if action_col in final_states.columns:
+                # One-hot encode actions
+                action_dummies = pd.get_dummies(
+                    final_states[action_col], 
+                    prefix=f"F{i}_Action"
+                )
+                final_states = pd.concat([final_states, action_dummies], axis=1)
+                feature_cols.extend(action_dummies.columns)
+        
+        # Add terrain and weather conditions
+        for col in ['Weather', 'Terrain']:
+            if col in final_states.columns:
+                # One-hot encode categorical variables
+                dummies = pd.get_dummies(final_states[col], prefix=col)
+                final_states = pd.concat([final_states, dummies], axis=1)
+                feature_cols.extend(dummies.columns)
+        
+        # Ensure all columns are numeric
+        print(f"Selected {len(feature_cols)} features")
+        
         # Prepare features and target
-        X = df.iloc[:, :-1].values  # All columns except result
-        y = df.iloc[:, -1].values   # Result column
+        X = final_states[feature_cols].values
+        y = final_states['outcome_binary'].values
         
         # Normalize features
         scaler = StandardScaler()
@@ -104,6 +163,8 @@ def load_and_preprocess_data(filepath, test_size=0.2, random_state=42):
         
     except Exception as e:
         print(f"Error loading data: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 
@@ -253,27 +314,108 @@ def plot_training_results(train_losses, test_losses, test_accuracies):
     print(f"Training visualization saved to 'visualizations/battle_predictor_training.png'")
 
 
-def load_model(model_path='models/best_battle_predictor.pt', input_size=11):
+def load_model(model_path='models/best_battle_predictor.pt', input_size=None):
     """Load a trained model from disk"""
+    # If input_size not specified, infer from model file
+    if input_size is None:
+        # Try to infer from model architecture
+        try:
+            # Load model to check architecture
+            checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+            # Check if input size is saved in the model
+            if 'input_size' in checkpoint:
+                input_size = checkpoint['input_size']
+            else:
+                # Guess based on first layer dimensions
+                first_layer = next(iter(checkpoint.items()))[1]
+                if hasattr(first_layer, 'shape'):
+                    input_size = first_layer.shape[1]
+                else:
+                    input_size = 64  # Default fallback
+        except:
+            print("Could not infer input size, using default")
+            input_size = 64
+    
     model = LSTMBattlePredictor(input_size=input_size, hidden_size=64, num_layers=2)
-    model.load_state_dict(torch.load(model_path, weights_only=True))
+    
+    try:
+        model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    except:
+        print("Warning: Had issues loading model state dict directly. Trying alternative approach.")
+        checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+        model.load_state_dict(checkpoint)
+        
     model.eval()
     return model
 
 
-def predict_battle_outcome(model, battle_data):
+def predict_battle_outcome(model, battle_state):
     """
-    Predict battle outcome from a single battle state
+    Predict battle outcome from current battlefield state
     
     Parameters:
         model: Trained LSTM model
-        battle_data: List containing [Infantry_x, Infantry_y, Tank_x, ...] for a battle state
+        battle_state: Can be:
+            - List containing feature values 
+            - Dictionary with battlefield state information
+            - BattlefieldEnv instance
         
     Returns:
         win_probability: Probability of victory (0-1)
     """
+    # If input is BattlefieldEnv, extract state
+    from battlefield_env import BattlefieldEnv
+    if isinstance(battle_state, BattlefieldEnv):
+        # Extract relevant features from environment
+        features = []
+        
+        # Add friendly unit positions and health
+        for unit in battle_state.friendly_units:
+            features.extend([
+                unit.position[0], unit.position[1],
+                unit.hp / unit.max_hp  # Normalized health
+            ])
+            
+        # Add enemy positions and health
+        for enemy in battle_state.enemies:
+            features.extend([
+                enemy.position[0], enemy.position[1],
+                enemy.hp / enemy.max_hp  # Normalized health
+            ])
+            
+        # Add terrain and weather one-hot encoded
+        terrain_idx = list(battle_state.TERRAIN_TYPES.keys()).index(battle_state.current_terrain)
+        weather_idx = list(battle_state.WEATHER_CONDITIONS.keys()).index(battle_state.current_weather)
+        
+        # One-hot encoding
+        terrain_features = [0] * len(battle_state.TERRAIN_TYPES)
+        terrain_features[terrain_idx] = 1
+        
+        weather_features = [0] * len(battle_state.WEATHER_CONDITIONS)
+        weather_features[weather_idx] = 1
+        
+        features.extend(terrain_features)
+        features.extend(weather_features)
+        
+    elif isinstance(battle_state, dict):
+        # Extract features from dictionary
+        features = []
+        # Add unit positions (assuming dictionary format matches expected input)
+        for unit_key in ['infantry', 'tank', 'drone']:
+            if unit_key in battle_state:
+                pos = battle_state[unit_key]
+                features.extend([pos[0], pos[1]])
+        
+        # Add enemy position if available
+        if 'enemy' in battle_state:
+            features.extend(battle_state['enemy'])
+            
+    else:
+        # Assume it's already a list of features
+        features = battle_state
+    
     # Convert to tensor and add batch/time dimensions
-    x = torch.FloatTensor(battle_data).unsqueeze(0).unsqueeze(0)
+    x = torch.FloatTensor(features).unsqueeze(0).unsqueeze(0)
     
     # Make prediction
     with torch.no_grad():

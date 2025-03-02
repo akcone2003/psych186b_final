@@ -1,7 +1,7 @@
 """
 Battlefield Strategy GUI
 
-A graphical user interface for the Battlefield Strategy Simulation system.
+A graphical user interface for the Enhanced Battlefield Strategy Simulation system.
 Makes it easy to run simulations, train models, and use the battle advisor.
 """
 import os
@@ -14,23 +14,47 @@ import numpy as np
 import threading
 import queue
 import torch
+import random
+import math
 
 # Add parent directory to path so we can import our modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import our modules
-from src.battlefield_env import run_simulation, BattlefieldEnv
-from src.lstm_model import main as train_model, load_model, predict_battle_outcome
-from src.battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
+# Try importing from both module styles to be flexible
+try:
+    # Try importing directly (if files are in the root directory)
+    from battlefield_env import run_simulation, BattlefieldEnv, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
+    from lstm_model import main as train_model, load_model, predict_battle_outcome
+    from battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
+    # Import visualization if available
+    try:
+        from battlefield_visuals import show_latest_battlefield
+    except ImportError:
+        # Define a fallback function if the module is not available
+        def show_latest_battlefield(file_path="data/battle_data.csv"):
+            print("battlefield_visuals module not found. Cannot show battlefield visualization.")
+except ImportError:
+    # Fall back to src/ directory structure (original setup)
+    from src.battlefield_env import run_simulation, BattlefieldEnv, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
+    from src.lstm_model import main as train_model, load_model, predict_battle_outcome
+    from src.battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
+    # Import visualization if available
+    try:
+        from src.battlefield_visuals import show_latest_battlefield
+    except ImportError:
+        # Define a fallback function if the module is not available
+        def show_latest_battlefield(file_path="data/battle_data.csv"):
+            print("battlefield_visuals module not found. Cannot show battlefield visualization.")
+
 
 class BattlefieldGUI(tk.Tk):
-    """Main GUI application for the Battlefield Strategy system"""
+    """Main GUI application for the Enhanced Battlefield Strategy system"""
     
     def __init__(self):
         super().__init__()
         
         # Configure main window
-        self.title("Battlefield Strategy System")
+        self.title("Enhanced Battlefield Strategy System")
         self.geometry("1000x700")
         self.minsize(800, 600)
         
@@ -72,6 +96,7 @@ class BattlefieldGUI(tk.Tk):
         
         # Initialize model
         self.model = None
+        self.battlefield_env = None
         
         # Now load model if it exists (AFTER status_var is created)
         self.load_model_if_exists()
@@ -83,10 +108,21 @@ class BattlefieldGUI(tk.Tk):
         # Check for required directories
         self._ensure_directories_exist()
 
+    def show_real_time_battlefield(self):
+        """Show the latest battlefield grid-based visualization with terrain & weather from the simulation."""
+        try:
+            print("⚔️ Generating the latest battlefield grid visualization...")
+            show_latest_battlefield(file_path="data/battle_data.csv")
+        except Exception as e:
+            messagebox.showerror("Visualization Error", f"Could not display battlefield: {e}")
+            # Fallback to manual rendering if the battlefield_visuals module isn't available
+            if hasattr(self, 'battlefield_env') and self.battlefield_env is not None:
+                self.battlefield_env.render()
+
     def get_optimal_actions(self):
         """Wrapper to call get_optimal_actions from battle_strategy.py"""
         if self.model is None:
-            messagebox.showerror("Error", "No model not loaded")
+            messagebox.showerror("Error", "No model loaded")
             return
         
         unit_positions = {
@@ -96,7 +132,6 @@ class BattlefieldGUI(tk.Tk):
         }
         enemy_position = [self.enemy_x_var.get(), self.enemy_y_var.get()]
         
-        from src.battle_strategy import get_optimal_actions
         best_actions, win_prob = get_optimal_actions(self.model, unit_positions, enemy_position)
         
         action_names = ['Move', 'Attack', 'Defend', 'Retreat', 'Support']
@@ -117,7 +152,10 @@ class BattlefieldGUI(tk.Tk):
             
         enemy_position = [self.enemy_x_var.get(), self.enemy_y_var.get()]
         
-        from src.battle_strategy import get_optimal_positioning
+        # Update status
+        self.status_var.set("Calculating optimal positions...")
+        self.update()
+        
         best_positions, win_prob = get_optimal_positioning(self.model, enemy_position)
         
         result_text = f"🎯 Optimal Unit Positions:\n\n"
@@ -128,34 +166,63 @@ class BattlefieldGUI(tk.Tk):
         
         self.advisor_results.delete(1.0, tk.END)
         self.advisor_results.insert(tk.END, result_text)
+        
+        # Update the input fields with the optimal positions
+        self.inf_x_var.set(best_positions['infantry'][0])
+        self.inf_y_var.set(best_positions['infantry'][1])
+        self.tank_x_var.set(best_positions['tank'][0])
+        self.tank_y_var.set(best_positions['tank'][1])
+        self.drone_x_var.set(best_positions['drone'][0])
+        self.drone_y_var.set(best_positions['drone'][1])
+        
+        # Reset status
+        self.status_var.set("Ready")
 
     def show_heatmap(self):
         """Wrapper to show heatmap using generate_battle_heatmap"""
-        if self.model is None:
-            messagebox.showerror("Error", "Model not loaded")
+        
+        # Ensure these attributes exist before trying to access them
+        if not hasattr(self, 'viz_enemy_x_var') or not hasattr(self, 'viz_enemy_y_var'):
+            print("⚠️ Error: vizualization variables not initialized!")
             return
-            
+
+        # Create a new battlefield environment for visualization
+        env = BattlefieldEnv()
+        
         enemy_position = [self.viz_enemy_x_var.get(), self.viz_enemy_y_var.get()]
-        unit_positions = {'tank': [5, 5], 'drone': [7, 3]}
+        print(f"📍 Generating heatmap for enemy at position: {enemy_position}")
         
-        from src.battle_strategy import generate_battle_heatmap
-        heatmap = generate_battle_heatmap(self.model, enemy_position, unit_positions)
+        # Update status
+        old_status = self.status_var.get()
+        self.status_var.set("Generating battlefield heatmap...")
+        self.update()
         
-        # Plot heatmap
-        self.viz_fig.clear()
-        ax = self.viz_fig.add_subplot(111)
-        im = ax.imshow(heatmap, cmap='viridis', interpolation='nearest', origin='lower')
-        self.viz_fig.colorbar(im, ax=ax, label='Victory Probability')
-        
-        # Mark positions
-        ax.scatter(enemy_position[1], enemy_position[0], color='red', s=100, marker='*', label='Enemy')
-        ax.scatter(unit_positions['tank'][1], unit_positions['tank'][0], color='blue', s=80, marker='s', label='Tank')
-        ax.scatter(unit_positions['drone'][1], unit_positions['drone'][0], color='green', s=60, marker='^', label='Drone')
-        
-        ax.set_title('Infantry Victory Probability Heatmap')
-        ax.legend()
-        
-        self.viz_canvas.draw()
+        try:
+            heatmap = generate_battle_heatmap(self.model, enemy_position)
+
+            # Plot heatmap
+            self.viz_fig.clear()
+            ax = self.viz_fig.add_subplot(111)
+            im = ax.imshow(heatmap, cmap='viridis', interpolation='nearest', origin='lower')
+            self.viz_fig.colorbar(im, ax=ax, label='Victory Probability')
+
+            # Mark enemy position
+            ax.scatter(enemy_position[1], enemy_position[0], color='red', s=100, marker='*', label='Enemy')
+
+            # Add terrain information if available
+            if hasattr(env, 'terrain_data') and env.terrain_data is not None:
+                ax.set_title(f'Victory Probability Heatmap\nTerrain: {env._get_dominant_terrain()}, Weather: {env.current_weather}')
+            else:
+                ax.set_title('Infantry Victory Probability Heatmap')
+                
+            ax.legend()
+            self.viz_canvas.draw()
+            
+            # Reset status
+            self.status_var.set("Heatmap generated successfully")
+        except Exception as e:
+            self.status_var.set(f"Error generating heatmap: {e}")
+            messagebox.showerror("Heatmap Error", f"Error generating heatmap: {e}")
     
     def _ensure_directories_exist(self):
         """Make sure all required directories exist"""
@@ -196,9 +263,9 @@ class BattlefieldGUI(tk.Tk):
         self.after(100, self.process_queue)
     
     def _setup_simulation_tab(self):
-        """Set up the simulation tab"""
+        """Set up the simulation tab with enhanced options"""
         # Header
-        header = ttk.Label(self.simulation_tab, text="Run Battle Simulations", style="Header.TLabel")
+        header = ttk.Label(self.simulation_tab, text="Run Enhanced Battle Simulations", style="Header.TLabel")
         header.grid(row=0, column=0, columnspan=2, pady=10, sticky='w')
         
         # Frame for parameters
@@ -207,7 +274,7 @@ class BattlefieldGUI(tk.Tk):
         
         # Number of battles
         ttk.Label(params_frame, text="Number of Battles:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-        self.num_battles_var = tk.IntVar(value=20)
+        self.num_battles_var = tk.IntVar(value=10)
         ttk.Spinbox(params_frame, from_=1, to=100, textvariable=self.num_battles_var, width=5).grid(row=0, column=1, padx=5, pady=5, sticky='w')
         
         # Max steps per battle
@@ -215,18 +282,27 @@ class BattlefieldGUI(tk.Tk):
         self.max_steps_var = tk.IntVar(value=30)
         ttk.Spinbox(params_frame, from_=10, to=100, textvariable=self.max_steps_var, width=5).grid(row=1, column=1, padx=5, pady=5, sticky='w')
         
+        # Max enemies
+        ttk.Label(params_frame, text="Max Enemies:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        self.max_enemies_var = tk.IntVar(value=3)
+        ttk.Spinbox(params_frame, from_=1, to=5, textvariable=self.max_enemies_var, width=5).grid(row=2, column=1, padx=5, pady=5, sticky='w')
+        
         # Output file
-        ttk.Label(params_frame, text="Output File:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(params_frame, text="Output File:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
         self.output_file_var = tk.StringVar(value="data/battle_data.csv")
-        ttk.Entry(params_frame, textvariable=self.output_file_var, width=30).grid(row=2, column=1, padx=5, pady=5, sticky='w')
+        ttk.Entry(params_frame, textvariable=self.output_file_var, width=30).grid(row=3, column=1, padx=5, pady=5, sticky='w')
+        
+        # Render checkbox
+        self.render_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(params_frame, text="Render Final States", variable=self.render_var).grid(row=4, column=0, columnspan=2, padx=5, pady=5, sticky='w')
         
         # Run button
-        ttk.Button(params_frame, text="Run Simulation", command=self.run_simulation).grid(row=3, column=0, columnspan=2, padx=5, pady=10)
+        ttk.Button(params_frame, text="Run Simulation", command=self.run_simulation).grid(row=5, column=0, columnspan=2, padx=5, pady=10)
         
         # Progress bar
-        ttk.Label(params_frame, text="Progress:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(params_frame, text="Progress:").grid(row=6, column=0, padx=5, pady=5, sticky='w')
         self.progress_var = tk.DoubleVar()
-        ttk.Progressbar(params_frame, variable=self.progress_var, maximum=100).grid(row=4, column=1, padx=5, pady=5, sticky='we')
+        ttk.Progressbar(params_frame, variable=self.progress_var, maximum=100).grid(row=6, column=1, padx=5, pady=5, sticky='we')
         
         # Simulation log
         log_frame = ttk.LabelFrame(self.simulation_tab, text="Simulation Log")
@@ -350,14 +426,27 @@ class BattlefieldGUI(tk.Tk):
         ttk.Label(positions_frame, text="Y:").grid(row=3, column=3, padx=5, pady=5, sticky='w')
         ttk.Spinbox(positions_frame, from_=0, to=9, textvariable=self.enemy_y_var, width=3).grid(row=3, column=4, padx=5, pady=5, sticky='w')
         
+        # Terrain and weather dropdowns (new in enhanced version)
+        ttk.Label(positions_frame, text="Terrain:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
+        self.terrain_var = tk.StringVar(value="Plains")
+        ttk.Combobox(positions_frame, textvariable=self.terrain_var, values=list(TERRAIN_TYPES.keys()), 
+                   state="readonly", width=10).grid(row=4, column=1, columnspan=2, padx=5, pady=5, sticky='w')
+        
+        ttk.Label(positions_frame, text="Weather:").grid(row=5, column=0, padx=5, pady=5, sticky='w')
+        self.weather_var = tk.StringVar(value="Clear")
+        ttk.Combobox(positions_frame, textvariable=self.weather_var, values=list(WEATHER_CONDITIONS.keys()), 
+                    state="readonly", width=10).grid(row=5, column=1, columnspan=2, padx=5, pady=5, sticky='w')
+        
         # Action buttons
         actions_frame = ttk.LabelFrame(self.advisor_tab, text="Advisory Actions")
         actions_frame.grid(row=2, column=0, padx=10, pady=10, sticky='nw')
         
-        #----------------------------DEBUG------------------------
         ttk.Button(actions_frame, text="Get Optimal Actions", command=self.get_optimal_actions).grid(row=0, column=0, padx=5, pady=5, sticky='w')
         ttk.Button(actions_frame, text="Get Optimal Positions", command=self.get_optimal_positioning).grid(row=1, column=0, padx=5, pady=5, sticky='w')
         ttk.Button(actions_frame, text="Generate Heatmap", command=self.show_heatmap).grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        
+        # Create simulation button (new in enhanced version)
+        ttk.Button(actions_frame, text="Run Interactive Battle", command=self.run_interactive_battle).grid(row=3, column=0, padx=5, pady=5, sticky='w')
         
         # Results frame
         results_frame = ttk.LabelFrame(self.advisor_tab, text="Advisory Results")
@@ -380,91 +469,58 @@ class BattlefieldGUI(tk.Tk):
         results_frame.rowconfigure(0, weight=1)
     
     def _setup_visualization_tab(self):
-        """Set up the visualization tab"""
+        """Set up the visualization tab with enhanced options"""
         # Header
         header = ttk.Label(self.visualization_tab, text="Battlefield Visualizations", style="Header.TLabel")
         header.grid(row=0, column=0, columnspan=2, pady=10, sticky='w')
-        
+
         # Frame for visualization controls
         controls_frame = ttk.LabelFrame(self.visualization_tab, text="Visualization Controls")
         controls_frame.grid(row=1, column=0, padx=10, pady=10, sticky='nw')
+
+        # Initialize visualization variables
+        self.viz_enemy_x_var = tk.IntVar(value=5)
+        self.viz_enemy_y_var = tk.IntVar(value=5)
+
+        # Enemy position input
+        ttk.Label(controls_frame, text="Enemy Position (X, Y):").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        ttk.Spinbox(controls_frame, from_=0, to=9, textvariable=self.viz_enemy_x_var, width=3).grid(row=0, column=1, padx=5, pady=5, sticky='w')
+        ttk.Spinbox(controls_frame, from_=0, to=9, textvariable=self.viz_enemy_y_var, width=3).grid(row=0, column=2, padx=5, pady=5, sticky='w')
+
+        # Buttons for both heatmap and real-time battlefield visualization
+        ttk.Button(controls_frame, text="Show Heatmap", command=self.show_heatmap).grid(row=1, column=0, columnspan=3, padx=5, pady=10)
+        ttk.Button(controls_frame, text="Show Real-Time Battlefield", command=self.show_real_time_battlefield).grid(row=2, column=0, columnspan=3, padx=5, pady=10)
         
-        # Visualization type
-        ttk.Label(controls_frame, text="Visualization Type:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-        self.viz_type_var = tk.StringVar(value="Heatmap")
-        viz_type_combo = ttk.Combobox(controls_frame, textvariable=self.viz_type_var, values=["Heatmap", "Battle Simulation", "Training Metrics"])
-        viz_type_combo.grid(row=0, column=1, padx=5, pady=5, sticky='w')
-        viz_type_combo.bind("<<ComboboxSelected>>", self.update_viz_controls)
+        # Visualization type selector
+        ttk.Label(controls_frame, text="Terrain Type:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        self.viz_terrain_var = tk.StringVar(value="Plains")
+        terrain_combo = ttk.Combobox(controls_frame, textvariable=self.viz_terrain_var, 
+                                   values=list(TERRAIN_TYPES.keys()), state="readonly")
+        terrain_combo.grid(row=3, column=1, columnspan=2, padx=5, pady=5, sticky='w')
         
-        # Placeholder for dynamic controls
-        self.viz_controls_frame = ttk.Frame(controls_frame)
-        self.viz_controls_frame.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky='nsew')
+        ttk.Label(controls_frame, text="Weather Condition:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
+        self.viz_weather_var = tk.StringVar(value="Clear")
+        weather_combo = ttk.Combobox(controls_frame, textvariable=self.viz_weather_var, 
+                                    values=list(WEATHER_CONDITIONS.keys()), state="readonly")
+        weather_combo.grid(row=4, column=1, columnspan=2, padx=5, pady=5, sticky='w')
         
-        # Initial controls setup
-        self.update_viz_controls()
-        
-        # Visualization frame
-        viz_frame = ttk.LabelFrame(self.visualization_tab, text="Visualization")
-        viz_frame.grid(row=1, column=1, rowspan=2, padx=10, pady=10, sticky='nsew')
-        
-        # Make the viz frame expandable
-        self.visualization_tab.columnconfigure(1, weight=1)
-        self.visualization_tab.rowconfigure(2, weight=1)
-        viz_frame.columnconfigure(0, weight=1)
-        viz_frame.rowconfigure(0, weight=1)
-        
+        # Create a button to generate the environmental impact visualization
+        ttk.Button(controls_frame, text="Analyze Environment Impact", 
+                  command=self.show_environment_impact).grid(row=5, column=0, columnspan=3, padx=5, pady=10)
+
         # Placeholder for visualization
         self.viz_fig = plt.Figure(figsize=(6, 6), dpi=100)
-        self.viz_canvas = FigureCanvasTkAgg(self.viz_fig, viz_frame)
-        self.viz_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=1)
+        self.viz_canvas = FigureCanvasTkAgg(self.viz_fig, self.visualization_tab)
+        self.viz_canvas.get_tk_widget().grid(row=1, column=1, rowspan=3, padx=5, pady=5, sticky='nsew')
+        
+        # Make the visualization column expandable
+        self.visualization_tab.columnconfigure(1, weight=1)
+        self.visualization_tab.rowconfigure(1, weight=1)
     
     def update_viz_controls(self, event=None):
         """Update visualization controls based on selected type"""
-        # Clear existing controls
-        for widget in self.viz_controls_frame.winfo_children():
-            widget.destroy()
-        
-        viz_type = self.viz_type_var.get()
-        
-        if viz_type == "Heatmap":
-            # Enemy position
-            ttk.Label(self.viz_controls_frame, text="Enemy Position:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-            self.viz_enemy_x_var = tk.IntVar(value=8)
-            self.viz_enemy_y_var = tk.IntVar(value=8)
-            ttk.Label(self.viz_controls_frame, text="X:").grid(row=0, column=1, padx=5, pady=5, sticky='w')
-            ttk.Spinbox(self.viz_controls_frame, from_=0, to=9, textvariable=self.viz_enemy_x_var, width=3).grid(row=0, column=2, padx=5, pady=5, sticky='w')
-            ttk.Label(self.viz_controls_frame, text="Y:").grid(row=0, column=3, padx=5, pady=5, sticky='w')
-            ttk.Spinbox(self.viz_controls_frame, from_=0, to=9, textvariable=self.viz_enemy_y_var, width=3).grid(row=0, column=4, padx=5, pady=5, sticky='w')
-            
-            # Generate button
-            ttk.Button(self.viz_controls_frame, text="Generate Heatmap", command=self.show_heatmap).grid(row=1, column=0, columnspan=5, padx=5, pady=10)
-            
-        elif viz_type == "Battle Simulation":
-            # Button to load simulation data
-            ttk.Button(self.viz_controls_frame, text="Load Simulation Data", command=self.load_simulation_data).grid(row=0, column=0, padx=5, pady=5, sticky='w')
-            
-            # Battle selector
-            ttk.Label(self.viz_controls_frame, text="Battle:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
-            self.battle_selector_var = tk.IntVar(value=1)
-            self.battle_selector = ttk.Spinbox(self.viz_controls_frame, from_=1, to=1, textvariable=self.battle_selector_var, width=3, state="disabled")
-            self.battle_selector.grid(row=1, column=1, padx=5, pady=5, sticky='w')
-            
-            # Play, pause, step buttons
-            ttk.Button(self.viz_controls_frame, text="Play", command=self.play_battle, state="disabled").grid(row=2, column=0, padx=5, pady=5, sticky='w')
-            ttk.Button(self.viz_controls_frame, text="Pause", command=self.pause_battle, state="disabled").grid(row=2, column=1, padx=5, pady=5, sticky='w')
-            ttk.Button(self.viz_controls_frame, text="Step", command=self.step_battle, state="disabled").grid(row=2, column=2, padx=5, pady=5, sticky='w')
-            
-        elif viz_type == "Training Metrics":
-            # Load training metrics
-            ttk.Button(self.viz_controls_frame, text="Load Training Metrics", command=self.load_training_metrics).grid(row=0, column=0, padx=5, pady=5, sticky='w')
-            
-            # Metric selector
-            ttk.Label(self.viz_controls_frame, text="Metric:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
-            self.metric_var = tk.StringVar(value="Loss")
-            ttk.Combobox(self.viz_controls_frame, textvariable=self.metric_var, values=["Loss", "Accuracy"], state="readonly").grid(row=1, column=1, padx=5, pady=5, sticky='w')
-            
-            # Update button
-            ttk.Button(self.viz_controls_frame, text="Update Visualization", command=self.update_metrics_viz).grid(row=2, column=0, columnspan=2, padx=5, pady=10)
+        # Not needed anymore - we've restructured the visualization tab
+        pass
     
     def browse_file(self, var):
         """Open file browser and update the variable"""
@@ -473,13 +529,15 @@ class BattlefieldGUI(tk.Tk):
             var.set(filename)
     
     def run_simulation(self):
-        """Run battle simulation"""
+        """Run battle simulation with enhanced parameters"""
         # Check if directories exist
         os.makedirs('data', exist_ok=True)
         
         # Get parameters
         num_battles = self.num_battles_var.get()
         max_steps = self.max_steps_var.get()
+        max_enemies = self.max_enemies_var.get() if hasattr(self, 'max_enemies_var') else 3
+        render_final = self.render_var.get() if hasattr(self, 'render_var') else True
         output_file = self.output_file_var.get()
         
         # Clear log
@@ -505,46 +563,25 @@ class BattlefieldGUI(tk.Tk):
                     progress = (battle / total) * 100
                     self.queue.put(("progress", progress))
                 
-                # Run simulation
-                self.queue.put(("status", f"Running simulation with {num_battles} battles..."))
-                for battle in range(num_battles):
-                    # Create environment
-                    env = BattlefieldEnv()
-                    
-                    # Reset environment
-                    obs = env.reset()
-                    step_count = 0
-                    done = False
-                    
-                    # Run battle
-                    while not done and step_count < max_steps:
-                        # Random actions
-                        actions = np.array([
-                            np.random.randint(0, 4),
-                            np.random.randint(0, 4),
-                            np.random.randint(0, 4)
-                        ])
-                        
-                        # Execute action
-                        obs, reward, done, info = env.step(actions)
-                        step_count += 1
-                    
-                    # Determine result
-                    result = 1 if 'result' in info and info['result'] == 'victory' else 0
-                    
-                    # Save battle log
-                    env.save_battle_log(result)
-                    
-                    # Update progress
-                    progress_callback(battle + 1, num_battles)
-                    
-                    self.queue.put(("log", f"Battle {battle+1}/{num_battles} completed - Outcome: {'Victory' if result else 'Defeat'}"))
+                # Run simulation - use the enhanced battlefield
+                self.queue.put(("status", f"Running enhanced simulation with {num_battles} battles..."))
+                
+                results = run_simulation(
+                    num_battles=num_battles, 
+                    max_steps=max_steps, 
+                    max_enemies=max_enemies,
+                    render_final=render_final
+                )
                 
                 # Restore standard output
                 builtins.print = original_print
                 
                 self.queue.put(("status", "Simulation complete!"))
                 self.queue.put(("progress", 100))
+                
+                if render_final:
+                    self.queue.put(("log", "Visualization windows may remain open. Close them to continue."))
+                
                 messagebox.showinfo("Success", f"Simulation completed with {num_battles} battles")
                 
             except Exception as e:
@@ -557,8 +594,98 @@ class BattlefieldGUI(tk.Tk):
         sim_thread.daemon = True
         sim_thread.start()
     
+    def run_interactive_battle(self):
+        """Run an interactive battle with the current battlefield parameters"""
+        try:
+            # Initialize battlefield environment
+            env = BattlefieldEnv()
+            self.battlefield_env = env
+            
+            # Set custom positions if needed
+            # This would need to modify the battlefield environment directly
+            
+            # Just render the battlefield for now
+            env.render()
+            
+            # Store for future reference
+            self.battlefield_env = env
+            
+            # Add the battlefield view to the results
+            self.advisor_results.delete(1.0, tk.END)
+            self.advisor_results.insert(tk.END, "Interactive battle initialized!\n\n")
+            self.advisor_results.insert(tk.END, f"Terrain: {env.current_terrain}\n")
+            self.advisor_results.insert(tk.END, f"Weather: {env.current_weather}\n\n")
+            self.advisor_results.insert(tk.END, f"Friendly Units: {len(env.friendly_units)}\n")
+            self.advisor_results.insert(tk.END, f"Enemy Units: {len(env.enemies)}\n")
+            
+            # Display unit types
+            self.advisor_results.insert(tk.END, "\nFriendly Unit Types:\n")
+            for i, unit in enumerate(env.friendly_units):
+                self.advisor_results.insert(tk.END, f"Unit {i+1}: {unit.unit_type.name}\n")
+            
+            self.advisor_results.insert(tk.END, "\nEnemy Unit Types:\n")
+            for i, enemy in enumerate(env.enemies):
+                self.advisor_results.insert(tk.END, f"Enemy {i+1}: {enemy.unit_type.name}\n")
+                
+        except Exception as e:
+            self.status_var.set(f"Error running interactive battle: {e}")
+            messagebox.showerror("Error", f"Could not initialize battlefield: {e}")
+    
+    def show_environment_impact(self):
+        """Show the impact of different terrain and weather on battle outcomes"""
+        # Create a new window for the visualization
+        impact_window = tk.Toplevel(self)
+        impact_window.title("Environment Impact Analysis")
+        impact_window.geometry("800x600")
+        
+        # Create figure
+        fig = plt.Figure(figsize=(10, 8))
+        
+        # Create subplots for terrain and weather
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+        
+        # Example data (in a real implementation, this would come from analysis of battle data)
+        terrain_types = list(TERRAIN_TYPES.keys())
+        terrain_win_rates = [0.65, 0.45, 0.55, 0.60, 0.50]  # Example win rates for different terrains
+        
+        weather_types = list(WEATHER_CONDITIONS.keys())
+        weather_win_rates = [0.60, 0.45, 0.50, 0.40, 0.55]  # Example win rates for different weather
+        
+        # Plot terrain impact
+        terrain_bars = ax1.bar(terrain_types, terrain_win_rates, color='green', alpha=0.7)
+        ax1.set_ylim(0, 1.0)
+        ax1.set_ylabel("Win Rate")
+        ax1.set_title("Impact of Terrain on Battle Outcomes")
+        ax1.grid(axis='y', linestyle='--', alpha=0.3)
+        
+        # Add value labels
+        for bar, rate in zip(terrain_bars, terrain_win_rates):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f"{rate:.0%}", ha='center', va='bottom')
+        
+        # Plot weather impact
+        weather_bars = ax2.bar(weather_types, weather_win_rates, color='blue', alpha=0.7)
+        ax2.set_ylim(0, 1.0)
+        ax2.set_ylabel("Win Rate")
+        ax2.set_title("Impact of Weather on Battle Outcomes")
+        ax2.grid(axis='y', linestyle='--', alpha=0.3)
+        
+        # Add value labels
+        for bar, rate in zip(weather_bars, weather_win_rates):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f"{rate:.0%}", ha='center', va='bottom')
+        
+        # Set layout
+        fig.tight_layout()
+        
+        # Embed in window
+        canvas = FigureCanvasTkAgg(fig, master=impact_window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    
     def train_model(self):
-        """Train the LSTM model"""
+        """Trigger the model training from lstm_model.py"""
         # Check if data file exists
         data_file = self.data_file_var.get()
         if not os.path.exists(data_file):
@@ -566,7 +693,6 @@ class BattlefieldGUI(tk.Tk):
             return
         
         # Get parameters
-        epochs = self.epochs_var.get()
         model_path = self.model_path_var.get()
         
         # Ensure directories exist
@@ -579,148 +705,38 @@ class BattlefieldGUI(tk.Tk):
         # Start training in a separate thread
         def train_thread():
             try:
-                self.queue.put(("status", "Loading and preprocessing data..."))
+                self.queue.put(("status", "Starting model training..."))
+                self.queue.put(("progress", 10))
                 
-                # Create a custom callback for progress updates
-                class TrainingCallback:
-                    def __init__(self, queue, epochs):
-                        self.queue = queue
-                        self.epochs = epochs
-                        self.train_losses = []
-                        self.test_losses = []
-                        self.test_accuracies = []
-                    
-                    def on_epoch_end(self, epoch, train_loss, test_loss, accuracy, lr):
-                        # Update progress
-                        progress = ((epoch + 1) / self.epochs) * 100
-                        self.queue.put(("progress", progress))
-                        
-                        # Update status
-                        self.queue.put(("status", f"Epoch {epoch+1}/{self.epochs} | Loss: {train_loss:.4f} | Accuracy: {accuracy:.2f}%"))
-                        
-                        # Store metrics
-                        self.train_losses.append(train_loss)
-                        self.test_losses.append(test_loss)
-                        self.test_accuracies.append(accuracy)
-                        
-                        # Update plot (every 5 epochs to reduce UI updates)
-                        if (epoch + 1) % 5 == 0 or epoch == self.epochs - 1:
-                            self.update_plot()
-                    
-                    def update_plot(self):
-                        self.queue.put(("status", "Updating training plot..."))
-                        
-                        # Clear figure
-                        self.queue.put(("update_plot", (self.train_losses, self.test_losses, self.test_accuracies)))
+                # Simply call the main function from lstm_model
+                # This avoids duplicating any training logic
+                train_model()
                 
-                # Create callback
-                callback = TrainingCallback(self.queue, epochs)
-                
-                # Load and preprocess data
-                from src.lstm_model import load_and_preprocess_data, LSTMBattlePredictor
-                import torch.optim as optim
-                import torch.nn as nn
-                
-                train_loader, test_loader, input_size, _ = load_and_preprocess_data(data_file)
-                
-                # Create model
-                model = LSTMBattlePredictor(
-                    input_size=input_size,
-                    hidden_size=self.hidden_size_var.get(),
-                    num_layers=2,
-                    dropout=0.3
-                )
-                
-                # Train model
-                criterion = nn.BCELoss()
-                optimizer = optim.Adam(model.parameters(), lr=self.lr_var.get())
-                scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
-                
-                # Training loop
-                best_accuracy = 0
-                patience = 10
-                no_improvement = 0
-                
-                for epoch in range(epochs):
-                    # Training phase
-                    model.train()
-                    train_loss = 0
-                    
-                    for batch_x, batch_y in train_loader:
-                        # Add time dimension if needed
-                        if len(batch_x.shape) == 2:
-                            batch_x = batch_x.unsqueeze(1)
-                            
-                        # Forward pass
-                        outputs = model(batch_x)
-                        loss = criterion(outputs, batch_y)
-                        
-                        # Backward pass
-                        optimizer.zero_grad()
-                        loss.backward()
-                        optimizer.step()
-                        
-                        train_loss += loss.item()
-                    
-                    # Calculate average training loss
-                    avg_train_loss = train_loss / len(train_loader)
-                    
-                    # Evaluation phase
-                    model.eval()
-                    test_loss = 0
-                    correct = 0
-                    total = 0
-                    
-                    with torch.no_grad():
-                        for batch_x, batch_y in test_loader:
-                            # Add time dimension if needed
-                            if len(batch_x.shape) == 2:
-                                batch_x = batch_x.unsqueeze(1)
-                                
-                            # Forward pass
-                            outputs = model(batch_x)
-                            loss = criterion(outputs, batch_y)
-                            test_loss += loss.item()
-                            
-                            # Calculate accuracy
-                            predicted = (outputs > 0.5).float()
-                            total += batch_y.size(0)
-                            correct += (predicted == batch_y).sum().item()
-                    
-                    # Calculate average test loss and accuracy
-                    avg_test_loss = test_loss / len(test_loader)
-                    accuracy = 100 * correct / total
-                    
-                    # Update learning rate
-                    scheduler.step(avg_test_loss)
-                    
-                    # Call callback
-                    callback.on_epoch_end(epoch, avg_train_loss, avg_test_loss, accuracy, 
-                                         optimizer.param_groups[0]['lr'])
-                    
-                    # Early stopping check
-                    if accuracy > best_accuracy:
-                        best_accuracy = accuracy
-                        # Save the best model
-                        torch.save(model.state_dict(), model_path)
-                        self.queue.put(("status", f"Model improved, saved checkpoint (Accuracy: {accuracy:.2f}%)"))
-                        no_improvement = 0
-                    else:
-                        no_improvement += 1
-                        if no_improvement >= patience:
-                            self.queue.put(("status", f"Early stopping triggered after {epoch+1} epochs"))
-                            break
+                # After training completes, load the trained model
+                self.model = load_model("models/best_battle_predictor.pt")
                 
                 # Update final status
-                self.queue.put(("status", f"Training complete! Best accuracy: {best_accuracy:.2f}%"))
+                self.queue.put(("status", "Training complete! Model loaded successfully."))
                 self.queue.put(("progress", 100))
                 
-                # Load the best model
-                self.model = LSTMBattlePredictor(input_size=input_size, hidden_size=self.hidden_size_var.get(), num_layers=2)
-                self.model.load_state_dict(torch.load(model_path, weights_only=True))
-                self.model.eval()
+                # Update the training plot if possible
+                try:
+                    if os.path.exists("visualizations/battle_predictor_training.png"):
+                        from PIL import Image, ImageTk
+                        img = Image.open("visualizations/battle_predictor_training.png")
+                        img = img.resize((600, 400), Image.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        
+                        # Display in the training figure
+                        self.training_fig.clear()
+                        ax = self.training_fig.add_subplot(111)
+                        ax.imshow(np.asarray(img))
+                        ax.axis('off')
+                        self.training_canvas.draw()
+                except Exception as img_e:
+                    print(f"Could not display training plot: {img_e}")
                 
-                messagebox.showinfo("Success", f"Training completed successfully!\nBest accuracy: {best_accuracy:.2f}%")
+                messagebox.showinfo("Success", "Training completed successfully!")
                 
             except Exception as e:
                 self.queue.put(("status", f"Error: {e}"))
@@ -732,48 +748,3 @@ class BattlefieldGUI(tk.Tk):
         train_thread = threading.Thread(target=train_thread)
         train_thread.daemon = True
         train_thread.start()
-        
-        # Set up plot update handler
-        def update_plot_handler():
-            try:
-                while True:
-                    message = self.queue.get_nowait()
-                    if message[0] == "update_plot":
-                        train_losses, test_losses, test_accuracies = message[1]
-                        
-                        # Update plot
-                        self.training_fig.clear()
-                        
-                        # Create subplots
-                        ax1 = self.training_fig.add_subplot(121)
-                        ax2 = self.training_fig.add_subplot(122)
-                        
-                        # Plot losses
-                        epochs = range(1, len(train_losses) + 1)
-                        ax1.plot(epochs, train_losses, 'b-', label='Training Loss')
-                        ax1.plot(epochs, test_losses, 'r-', label='Validation Loss')
-                        ax1.set_title('Training and Validation Loss')
-                        ax1.set_xlabel('Epochs')
-                        ax1.set_ylabel('Loss')
-                        ax1.legend()
-                        ax1.grid(True, alpha=0.3)
-                        
-                        # Plot accuracy
-                        ax2.plot(epochs, test_accuracies, 'g-', label='Validation Accuracy')
-                        ax2.set_title('Validation Accuracy')
-                        ax2.set_xlabel('Epochs')
-                        ax2.set_ylabel('Accuracy (%)')
-                        ax2.legend()
-                        ax2.grid(True, alpha=0.3)
-                        
-                        # Update canvas
-                        self.training_fig.tight_layout()
-                        self.training_canvas.draw()
-                    
-                    self.queue.task_done()
-            except queue.Empty:
-                pass
-            self.after(500, update_plot_handler)
-        
-        # Start plot update handler
-        update_plot_handler()
