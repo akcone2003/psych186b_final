@@ -34,18 +34,34 @@ def get_optimal_actions(model, unit_positions, enemy_position):
     best_actions = [0, 0, 0]  # Default actions
     best_prob = 0
     
+    # Get the expected input size from the model
+    input_size = None
+    for param in model.parameters():
+        if len(param.shape) >= 2:
+            # The first layer's weight matrix should have shape [hidden_size, input_size]
+            input_size = param.shape[1]
+            break
+    
+    if input_size is None:
+        input_size = 43  # Default if we can't determine from model
+    
+    print(f"Model expects input size: {input_size}")
+    
     # Try all action combinations (5 actions for each of 3 units = 125 combinations)
     for inf_action in range(5):
         for tank_action in range(5):
             for drone_action in range(5):
-                # Construct battle state
-                battle_state = [
+                # Construct basic battle state
+                base_battle_state = [
                     infantry_pos[0], infantry_pos[1],
                     tank_pos[0], tank_pos[1],
                     drone_pos[0], drone_pos[1],
                     inf_action, tank_action, drone_action,
                     enemy_position[0], enemy_position[1]
                 ]
+                
+                # Pad the battle state to match the model's expected input size
+                battle_state = pad_feature_vector(base_battle_state, input_size)
                 
                 # Get win probability
                 prob = predict_battle_outcome(model, battle_state)
@@ -83,6 +99,19 @@ def get_optimal_positioning(model, enemy_position, grid_size=10, action_set=[0, 
     # Instead, we'll do strategic sampling based on distance to enemy
     samples = 100
     positions_tried = 0
+    
+    # Get the expected input size from the model
+    input_size = None
+    for param in model.parameters():
+        if len(param.shape) >= 2:
+            # The first layer's weight matrix should have shape [hidden_size, input_size]
+            input_size = param.shape[1]
+            break
+    
+    if input_size is None:
+        input_size = 43  # Default if we can't determine from model
+    
+    print(f"Model expects input size: {input_size}")
     
     # Helper to generate positions with various distances to enemy
     def generate_position_candidates(enemy_pos, grid_size, count=10):
@@ -135,14 +164,17 @@ def get_optimal_positioning(model, enemy_position, grid_size=10, action_set=[0, 
                     
                 positions_tried += 1
                 
-                # Construct battle state
-                battle_state = [
+                # Construct basic battle state
+                base_battle_state = [
                     inf_pos[0], inf_pos[1],
                     tank_pos[0], tank_pos[1],
                     drone_pos[0], drone_pos[1],
                     action_set[0], action_set[1], action_set[2],
                     enemy_position[0], enemy_position[1]
                 ]
+                
+                # Pad the battle state to match the model's expected input size
+                battle_state = pad_feature_vector(base_battle_state, input_size)
                 
                 # Get win probability
                 prob = predict_battle_outcome(model, battle_state)
@@ -187,6 +219,19 @@ def generate_battle_heatmap(model, enemy_position, unit_positions=None, actions=
     if actions is None:
         actions = [0, 0, 0]  # Move, Move, Move
     
+    # Get the expected input size from the model
+    input_size = None
+    for param in model.parameters():
+        if len(param.shape) >= 2:
+            # The first layer's weight matrix should have shape [hidden_size, input_size]
+            input_size = param.shape[1]
+            break
+    
+    if input_size is None:
+        input_size = 43  # Default if we can't determine from model
+    
+    print(f"Model expects input size: {input_size}")
+    
     # Create empty heatmap
     grid_size = 10
     heatmap = np.zeros((grid_size, grid_size))
@@ -201,8 +246,8 @@ def generate_battle_heatmap(model, enemy_position, unit_positions=None, actions=
                 heatmap[x, y] = 0
                 continue
             
-            # Construct battle state
-            battle_state = [
+            # Construct basic battle state
+            base_battle_state = [
                 x, y,  # Infantry position
                 unit_positions['tank'][0], unit_positions['tank'][1],
                 unit_positions['drone'][0], unit_positions['drone'][1],
@@ -210,10 +255,40 @@ def generate_battle_heatmap(model, enemy_position, unit_positions=None, actions=
                 enemy_position[0], enemy_position[1]
             ]
             
+            # Pad the battle state to match the model's expected input size
+            battle_state = pad_feature_vector(base_battle_state, input_size)
+            
             # Get win probability
             heatmap[x, y] = predict_battle_outcome(model, battle_state)
     
     return heatmap
+
+def pad_feature_vector(features, target_size):
+    """
+    Pad a feature vector to the target size
+    
+    Parameters:
+        features: List of features
+        target_size: Desired length of feature vector
+        
+    Returns:
+        padded_features: Padded feature vector of length target_size
+    """
+    current_size = len(features)
+    
+    if current_size == target_size:
+        return features
+    
+    if current_size > target_size:
+        # If we have too many features, truncate
+        print(f"WARNING: Truncating feature vector from {current_size} to {target_size}")
+        return features[:target_size]
+    
+    # Pad with zeros to match expected dimension
+    padding_needed = target_size - current_size
+    padded_features = features + [0.0] * padding_needed
+    
+    return padded_features
 
 
 def visualize_battle_heatmap(heatmap, enemy_position, unit_positions=None):
@@ -307,70 +382,4 @@ def battle_advisor(model_path='models/best_battle_predictor.pt'):
                 enemy_position = [enemy_x, enemy_y]
                 
                 # Get optimal actions
-                best_actions, win_prob = get_optimal_actions(model, unit_positions, enemy_position)
-                
-                # Display results
-                action_names = ['Move', 'Attack', 'Defend', 'Retreat', 'Support']
-                print("\n🎲 Optimal Strategy:")
-                print(f"Infantry: {action_names[best_actions[0]]}")
-                print(f"Tank: {action_names[best_actions[1]]}")
-                print(f"Drone: {action_names[best_actions[2]]}")
-                print(f"Victory probability: {win_prob:.2%}")
-                
-            except Exception as e:
-                print(f"❌ Error: {e}")
-                
-        elif choice == '2':
-            try:
-                # Get enemy position
-                enemy_x = int(input("Enemy X position (0-9): "))
-                enemy_y = int(input("Enemy Y position (0-9): "))
-                enemy_position = [enemy_x, enemy_y]
-                
-                # Get optimal positions
-                best_positions, win_prob = get_optimal_positioning(model, enemy_position)
-                
-                # Display results
-                print("\n🎯 Optimal Unit Positions:")
-                print(f"Infantry: {best_positions['infantry']}")
-                print(f"Tank: {best_positions['tank']}")
-                print(f"Drone: {best_positions['drone']}")
-                print(f"Victory probability: {win_prob:.2%}")
-                
-            except Exception as e:
-                print(f"❌ Error: {e}")
-                
-        elif choice == '3':
-            try:
-                # Get positions
-                enemy_x = int(input("Enemy X position (0-9): "))
-                enemy_y = int(input("Enemy Y position (0-9): "))
-                tank_x = int(input("Tank X position (0-9): "))
-                tank_y = int(input("Tank Y position (0-9): "))
-                drone_x = int(input("Drone X position (0-9): "))
-                drone_y = int(input("Drone Y position (0-9): "))
-                
-                enemy_position = [enemy_x, enemy_y]
-                unit_positions = {
-                    'tank': [tank_x, tank_y],
-                    'drone': [drone_x, drone_y]
-                }
-                
-                # Generate and visualize heatmap
-                print("Generating heatmap (this may take a moment)...")
-                heatmap = generate_battle_heatmap(model, enemy_position, unit_positions)
-                visualize_battle_heatmap(heatmap, enemy_position, unit_positions)
-                
-            except Exception as e:
-                print(f"❌ Error: {e}")
-                
-        elif choice == '4':
-            print("Thank you for using Battle Strategy Advisor!")
-            break
-            
-        else:
-            print("Invalid choice. Please enter a number between 1 and 4.")
-            
-
-if __name__ == "__main__":
-    battle_advisor()
+                best_actions, win_prob = get_optimal_ac

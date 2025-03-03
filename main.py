@@ -175,4 +175,4 @@ if __name__ == "__main__":
         main()
     else:
         # If no arguments, launch the GUI by default
-        launch_gui()
+        launch_gui(
