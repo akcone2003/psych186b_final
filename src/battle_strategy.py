@@ -369,4 +369,8 @@ def battle_advisor(model_path='models/best_battle_predictor.pt'):
             break
             
         else:
-            print("Inva
+            print("Invalid choice. Please enter a number between 1 and 4.")
+            
+
+if __name__ == "__main__":
+    battle_advisor()

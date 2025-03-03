@@ -365,33 +365,286 @@ def train_lstm_model(train_loader, test_loader, input_size, num_epochs=50):
 
 
 def plot_training_results(train_losses, test_losses, test_accuracies):
-    """Plot training metrics with enhanced visualization"""
+    """Plot training metrics with enhanced visualization and higher resolution"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
     epochs = range(1, len(train_losses) + 1)
     
-    plt.figure(figsize=(15, 10))
+    # Set higher DPI for sharper images
+    plt.figure(figsize=(15, 10), dpi=150)
+    
+    # Use seaborn style if available for better aesthetics
+    try:
+        import seaborn as sns
+        sns.set_style("whitegrid")
+        sns.set_context("paper", font_scale=1.5)
+    except ImportError:
+        # If seaborn not available, enhance matplotlib style
+        plt.style.use('ggplot')
     
     # Loss plot with enhanced styling
     plt.subplot(2, 1, 1)
-    plt.plot(epochs, train_losses, 'b-', linewidth=2, label='Training Loss')
-    plt.plot(epochs, test_losses, 'r-', linewidth=2, label='Validation Loss')
-    plt.title('Training and Validation Loss', fontsize=16)
-    plt.xlabel('Epochs', fontsize=14)
-    plt.ylabel('Loss', fontsize=14)
-    plt.legend(fontsize=12)
+    plt.plot(epochs, train_losses, 'b-', linewidth=2.5, label='Training Loss')
+    plt.plot(epochs, test_losses, 'r-', linewidth=2.5, label='Validation Loss')
+    plt.title('Training and Validation Loss', fontsize=18, fontweight='bold')
+    plt.xlabel('Epochs', fontsize=16)
+    plt.ylabel('Loss', fontsize=16)
+    plt.legend(fontsize=14)
     plt.grid(True, alpha=0.3)
+    plt.tick_params(axis='both', which='major', labelsize=12)
     
     # Add loss values to the plot
     if not np.isnan(train_losses[-1]):
         plt.annotate(f'Final train loss: {train_losses[-1]:.4f}', 
                     xy=(epochs[-1], train_losses[-1]), 
-                    xytext=(epochs[-1]-3, train_losses[-1]+0.01),
-                    fontsize=10, fontweight='bold')
+                    xytext=(epochs[-1]-5, train_losses[-1]+0.01),
+                    fontsize=12, fontweight='bold',
+                    arrowprops=dict(arrowstyle="->", connectionstyle="arc3", color='blue'))
     if not np.isnan(test_losses[-1]):
         plt.annotate(f'Final val loss: {test_losses[-1]:.4f}', 
                     xy=(epochs[-1], test_losses[-1]), 
-                    xytext=(epochs[-1]-3, test_losses[-1]+0.01),
-                    fontsize=10, fontweight='bold')
+                    xytext=(epochs[-1]-5, test_losses[-1]+0.01),
+                    fontsize=12, fontweight='bold',
+                    arrowprops=dict(arrowstyle="->", connectionstyle="arc3", color='red'))
     
     # Accuracy plot with enhanced styling
     plt.subplot(2, 1, 2)
-    plt.plot(epochs, test_accuracies, 'g-', linewi
+    plt.plot(epochs, test_accuracies, color='green', linewidth=2.5, label='Validation Accuracy')
+    plt.title('Validation Accuracy', fontsize=18, fontweight='bold')
+    plt.xlabel('Epochs', fontsize=16)
+    plt.ylabel('Accuracy (%)', fontsize=16)
+    
+    # Fill area under accuracy curve for better visibility
+    plt.fill_between(epochs, 0, test_accuracies, alpha=0.2, color='green')
+    
+    # Set y-axis range for better visualization of accuracy changes
+    # Start accuracy from a reasonable minimum to emphasize the improvements
+    min_acc = max(50, min(test_accuracies) * 0.9 if min(test_accuracies) > 0 else 0)
+    plt.ylim(min_acc, 100)
+    
+    plt.legend(fontsize=14)
+    plt.grid(True, alpha=0.3)
+    plt.tick_params(axis='both', which='major', labelsize=12)
+    
+    # Add accuracy values to the plot
+    plt.annotate(f'Final accuracy: {test_accuracies[-1]:.2f}%', 
+                xy=(epochs[-1], test_accuracies[-1]), 
+                xytext=(epochs[-1]-5, test_accuracies[-1]-5),
+                fontsize=12, fontweight='bold',
+                arrowprops=dict(arrowstyle="->", connectionstyle="arc3", color='green'))
+    
+    plt.tight_layout(pad=4.0)
+    
+    # Save high-resolution image in various formats
+    plt.savefig('visualizations/battle_predictor_training.png', dpi=300, bbox_inches='tight')
+    plt.savefig('visualizations/battle_predictor_training.pdf', format='pdf', bbox_inches='tight')  # PDF for vector quality
+    
+    # Create summary statistics table as a separate figure
+    plt.figure(figsize=(10, 6), dpi=150)
+    plt.axis('off')
+    
+    # Calculate statistics
+    initial_train_loss = train_losses[0]
+    final_train_loss = train_losses[-1]
+    loss_improvement = ((initial_train_loss - final_train_loss) / initial_train_loss) * 100 if not np.isnan(initial_train_loss) and not np.isnan(final_train_loss) and initial_train_loss != 0 else 0
+    
+    initial_val_loss = test_losses[0]
+    final_val_loss = test_losses[-1]
+    val_loss_improvement = ((initial_val_loss - final_val_loss) / initial_val_loss) * 100 if not np.isnan(initial_val_loss) and not np.isnan(final_val_loss) and initial_val_loss != 0 else 0
+    
+    initial_accuracy = test_accuracies[0]
+    final_accuracy = test_accuracies[-1]
+    best_accuracy = max(test_accuracies)
+    accuracy_improvement = final_accuracy - initial_accuracy
+    
+    # Create a text summary with custom styling
+    summary_text = (
+        "TRAINING SUMMARY STATISTICS\n"
+        "===========================\n\n"
+        f"Total epochs trained: {len(epochs)}\n\n"
+        f"Training Loss:\n"
+        f"  - Initial: {initial_train_loss:.4f}\n"
+        f"  - Final: {final_train_loss:.4f}\n"
+        f"  - Improvement: {loss_improvement:.2f}%\n\n"
+        f"Validation Loss:\n"
+        f"  - Initial: {initial_val_loss:.4f}\n"
+        f"  - Final: {final_val_loss:.4f}\n"
+        f"  - Improvement: {val_loss_improvement:.2f}%\n\n"
+        f"Validation Accuracy:\n"
+        f"  - Initial: {initial_accuracy:.2f}%\n"
+        f"  - Final: {final_accuracy:.2f}%\n"
+        f"  - Best: {best_accuracy:.2f}%\n"
+        f"  - Change: {'+' if accuracy_improvement >= 0 else ''}{accuracy_improvement:.2f}%\n\n"
+        f"Model converged: {'Yes' if not np.isnan(final_train_loss) and final_train_loss < 0.1 else 'No'}\n"
+        f"Signs of overfitting: {'Yes' if not np.isnan(final_val_loss) and not np.isnan(final_train_loss) and final_val_loss > final_train_loss * 1.2 else 'No'}\n"
+    )
+    
+    plt.text(0.05, 0.95, summary_text, fontsize=12, va='top', family='monospace', fontweight='bold')
+    
+    # Save summary statistics in high resolution
+    plt.savefig('visualizations/training_summary_stats.png', dpi=300, bbox_inches='tight')
+    plt.savefig('visualizations/training_summary_stats.pdf', format='pdf', bbox_inches='tight')
+    
+    # Terminal summary (more detailed now)
+    print(f"\n{'='*40}")
+    print(f"TRAINING RESULTS SUMMARY")
+    print(f"{'='*40}")
+    print(f"Total Epochs: {len(epochs)}")
+    print(f"Starting Loss: {initial_train_loss:.4f}")
+    print(f"Final Loss: {final_train_loss:.4f}")
+    if not np.isnan(initial_train_loss) and not np.isnan(final_train_loss) and initial_train_loss != 0:
+        print(f"Loss Improvement: {loss_improvement:.2f}%")
+    print(f"Best Accuracy: {best_accuracy:.2f}%")
+    
+    print(f"\nTraining visualization saved to 'visualizations/battle_predictor_training.png/pdf'")
+    print(f"Summary statistics saved to 'visualizations/training_summary_stats.png/pdf'")
+    
+    return
+
+def load_model(model_path='models/best_battle_predictor.pt', input_size=None):
+    """Load a trained model from disk"""
+    # If input_size not specified, infer from model file
+    if input_size is None:
+        # Try to infer from model architecture
+        try:
+            # Load model to check architecture
+            checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+            # Check if input size is saved in the model
+            if 'input_size' in checkpoint:
+                input_size = checkpoint['input_size']
+            else:
+                # Guess based on first layer dimensions
+                first_layer = next(iter(checkpoint.items()))[1]
+                if hasattr(first_layer, 'shape'):
+                    input_size = first_layer.shape[1]
+                else:
+                    input_size = 64  # Default fallback
+        except:
+            print("Could not infer input size, using default")
+            input_size = 64
+    
+    model = LSTMBattlePredictor(input_size=input_size, hidden_size=64, num_layers=2)
+    
+    try:
+        model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    except:
+        print("Warning: Had issues loading model state dict directly. Trying alternative approach.")
+        checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+        model.load_state_dict(checkpoint)
+        
+    model.eval()
+    return model
+
+
+def predict_battle_outcome(model, battle_state):
+    """
+    Predict battle outcome from current battlefield state
+    
+    Parameters:
+        model: Trained LSTM model
+        battle_state: Can be:
+            - List containing feature values 
+            - Dictionary with battlefield state information
+            - BattlefieldEnv instance
+        
+    Returns:
+        win_probability: Probability of victory (0-1)
+    """
+    # If input is BattlefieldEnv, extract state
+    # Try importing from both locations
+    try:
+        from battlefield_env import BattlefieldEnv
+    except ImportError:
+        try:
+            from src.battlefield_env import BattlefieldEnv
+        except ImportError:
+            # Just continue without it - we don't actually need it for basic prediction
+            pass
+
+    if 'BattlefieldEnv' in globals() and isinstance(battle_state, BattlefieldEnv):
+        # Extract relevant features from environment
+        features = []
+        
+        # Add friendly unit positions and health
+        for unit in battle_state.friendly_units:
+            features.extend([
+                unit.position[0], unit.position[1],
+                unit.hp / unit.max_hp  # Normalized health
+            ])
+            
+        # Add enemy positions and health
+        for enemy in battle_state.enemies:
+            features.extend([
+                enemy.position[0], enemy.position[1],
+                enemy.hp / enemy.max_hp  # Normalized health
+            ])
+            
+        # Add terrain and weather one-hot encoded
+        terrain_idx = list(battle_state.TERRAIN_TYPES.keys()).index(battle_state.current_terrain)
+        weather_idx = list(battle_state.WEATHER_CONDITIONS.keys()).index(battle_state.current_weather)
+        
+        # One-hot encoding
+        terrain_features = [0] * len(battle_state.TERRAIN_TYPES)
+        terrain_features[terrain_idx] = 1
+        
+        weather_features = [0] * len(battle_state.WEATHER_CONDITIONS)
+        weather_features[weather_idx] = 1
+        
+        features.extend(terrain_features)
+        features.extend(weather_features)
+        
+    elif isinstance(battle_state, dict):
+        # Extract features from dictionary
+        features = []
+        # Add unit positions (assuming dictionary format matches expected input)
+        for unit_key in ['infantry', 'tank', 'drone']:
+            if unit_key in battle_state:
+                pos = battle_state[unit_key]
+                features.extend([pos[0], pos[1]])
+        
+        # Add enemy position if available
+        if 'enemy' in battle_state:
+            features.extend(battle_state['enemy'])
+            
+    else:
+        # Assume it's already a list of features
+        features = battle_state
+    
+    # Check for NaN values in features
+    if any(np.isnan(x) for x in features) or any(np.isinf(x) for x in features):
+        print("WARNING: NaN or inf values found in features, replacing with zeros")
+        features = [0.0 if np.isnan(x) or np.isinf(x) else x for x in features]
+    
+    # Convert to tensor and add batch/time dimensions
+    x = torch.FloatTensor(features).unsqueeze(0).unsqueeze(0)
+    
+    # Make prediction
+    with torch.no_grad():
+        win_probability = model(x).item()
+    
+    return win_probability
+
+
+def main():
+    """Main function to train model from data"""
+    try:
+        # Find the latest data file
+        data_file = find_latest_data_file()
+        
+        # Load and preprocess data
+        train_loader, test_loader, input_size, _ = load_and_preprocess_data(data_file)
+        
+        # Train model
+        model = train_lstm_model(train_loader, test_loader, input_size)
+        
+        print("\nTraining complete! Model saved as 'best_battle_predictor.pt'")
+        
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()
