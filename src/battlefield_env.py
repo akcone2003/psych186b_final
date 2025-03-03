@@ -1435,25 +1435,4 @@ def run_simulation(num_battles=10, max_steps=100, render_final=True, save_logs=T
             if log_file:
                 log_files.append(log_file)
         
-        # Render final state if requested
-        if render_final:
-            env.render()
-    
-    # Print overall results
-    print("\n--- Simulation Results ---")
-    print(f"Battles: {num_battles}")
-    print(f"Victories: {results['victory']} ({results['victory']/num_battles*100:.1f}%)")
-    print(f"Defeats: {results['defeat']} ({results['defeat']/num_battles*100:.1f}%)")
-    print(f"Timeouts: {results['timeout']} ({results['timeout']/num_battles*100:.1f}%)")
-    
-    if save_logs and log_files:
-        print(f"\nBattle logs saved to:")
-        for log_file in log_files:
-            print(f"- {log_file}")
-
-    return results
-
-
-if __name__ == "__main__":
-    # Run a simulation with the enhanced battlefield
-    results = run_simulation(num_battles=5, max_steps=100, render_final=True)
+        # 
