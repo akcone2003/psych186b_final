@@ -25,7 +25,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Try importing from both module styles to be flexible
 try:
     # Try importing directly (if files are in the root directory)
-    from battlefield_env import run_simulation, BattlefieldEnv, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
+    from battlefield_env import run_simulation, BattlefieldEnv, ATTACK_RANGES, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
     from lstm_model import main as train_model, load_model, predict_battle_outcome
     from battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
     # Import visualization if available
@@ -37,7 +37,7 @@ try:
             print("battlefield_visuals module not found. Cannot show battlefield visualization.")
 except ImportError:
     # Fall back to src/ directory structure (original setup)
-    from src.battlefield_env import run_simulation, BattlefieldEnv, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
+    from src.battlefield_env import run_simulation, BattlefieldEnv, ATTACK_RANGES, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
     from src.lstm_model import main as train_model, load_model, predict_battle_outcome
     from src.battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
     # Import visualization if available
@@ -160,10 +160,13 @@ class BattlefieldGUI(tk.Tk):
                     # Marker depends on type
                     if unit.unit_type == UnitType.INFANTRY:
                         marker = "o"  # Circle
+                        attack_range = ATTACK_RANGES[UnitType.INFANTRY]
                     elif unit.unit_type == UnitType.ARMORED:
                         marker = "s"  # Square
+                        attack_range = ATTACK_RANGES[UnitType.ARMORED]
                     elif unit.unit_type == UnitType.AERIAL:
                         marker = "^"  # Triangle
+                        attack_range = ATTACK_RANGES[UnitType.AERIAL]
                     else:
                         marker = "X"  # X
                         
@@ -184,6 +187,18 @@ class BattlefieldGUI(tk.Tk):
                         color='green'
                     )
                     ax.add_patch(health_rect)
+
+                    # Add attack range indicator as a dotted circle
+                    range_circle = patches.Circle(
+                        (y, x),  # Center at unit position
+                        radius=attack_range,  # Use appropriate attack range
+                        fill=False,
+                        linestyle='--',
+                        linewidth=1,
+                        color='blue',
+                        alpha=0.5
+                    )
+                    ax.add_patch(range_circle)
             
             # Plot enemy units
             for i, enemy in enumerate(env.enemies):
@@ -193,14 +208,19 @@ class BattlefieldGUI(tk.Tk):
                     # Marker depends on type
                     if enemy.unit_type == UnitType.INFANTRY:
                         marker = "o"  # Circle
+                        attack_range = ATTACK_RANGES[UnitType.INFANTRY]
                     elif enemy.unit_type == UnitType.ARMORED:
                         marker = "s"  # Square
+                        attack_range = ATTACK_RANGES[UnitType.ARMORED]
                     elif enemy.unit_type == UnitType.AERIAL:
                         marker = "^"  # Triangle
+                        attack_range = ATTACK_RANGES[UnitType.AERIAL]
                     elif enemy.unit_type == UnitType.ARTILLERY:
                         marker = "*"  # Star
+                        attack_range = ATTACK_RANGES[UnitType.ARTILLERY]
                     elif enemy.unit_type == UnitType.STEALTH:
                         marker = "P"  # Pentagon
+                        attack_range = ATTACK_RANGES[UnitType.STEALTH]
                     else:
                         marker = "X"  # X
                         
@@ -221,6 +241,18 @@ class BattlefieldGUI(tk.Tk):
                         color='red'
                     )
                     ax.add_patch(health_rect)
+
+                    # Add attack range indicator as a dotted circle
+                    range_circle = patches.Circle(
+                        (y, x),  # Center at unit position
+                        radius=attack_range,  # Use appropriate attack range
+                        fill=False,
+                        linestyle='--',
+                        linewidth=1,
+                        color='red',
+                        alpha=0.5
+                    )
+                    ax.add_patch(range_circle)
             
             # Add title
             ax.set_title(f"Battlefield - Terrain: {env.current_terrain}, Weather: {env.current_weather}")

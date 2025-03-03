@@ -76,9 +76,9 @@ TYPE_ADVANTAGES = [
 # Attack range based on unit type (in grid cells)
 ATTACK_RANGES = {
     UnitType.INFANTRY: 1,
-    UnitType.ARMORED: 1,
+    UnitType.ARMORED: 2,
     UnitType.AERIAL: 2,
-    UnitType.ARTILLERY: 3,
+    UnitType.ARTILLERY: 6,
     UnitType.STEALTH: 1
 }
 
