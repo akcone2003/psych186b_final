@@ -382,4 +382,70 @@ def battle_advisor(model_path='models/best_battle_predictor.pt'):
                 enemy_position = [enemy_x, enemy_y]
                 
                 # Get optimal actions
-                best_actions, win_prob = get_optimal_ac
+                best_actions, win_prob = get_optimal_actions(model, unit_positions, enemy_position)
+                
+                # Display results
+                action_names = ['Move', 'Attack', 'Defend', 'Retreat', 'Support']
+                print("\n🎲 Optimal Strategy:")
+                print(f"Infantry: {action_names[best_actions[0]]}")
+                print(f"Tank: {action_names[best_actions[1]]}")
+                print(f"Drone: {action_names[best_actions[2]]}")
+                print(f"Victory probability: {win_prob:.2%}")
+                
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                
+        elif choice == '2':
+            try:
+                # Get enemy position
+                enemy_x = int(input("Enemy X position (0-9): "))
+                enemy_y = int(input("Enemy Y position (0-9): "))
+                enemy_position = [enemy_x, enemy_y]
+                
+                # Get optimal positions
+                best_positions, win_prob = get_optimal_positioning(model, enemy_position)
+                
+                # Display results
+                print("\n🎯 Optimal Unit Positions:")
+                print(f"Infantry: {best_positions['infantry']}")
+                print(f"Tank: {best_positions['tank']}")
+                print(f"Drone: {best_positions['drone']}")
+                print(f"Victory probability: {win_prob:.2%}")
+                
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                
+        elif choice == '3':
+            try:
+                # Get positions
+                enemy_x = int(input("Enemy X position (0-9): "))
+                enemy_y = int(input("Enemy Y position (0-9): "))
+                tank_x = int(input("Tank X position (0-9): "))
+                tank_y = int(input("Tank Y position (0-9): "))
+                drone_x = int(input("Drone X position (0-9): "))
+                drone_y = int(input("Drone Y position (0-9): "))
+                
+                enemy_position = [enemy_x, enemy_y]
+                unit_positions = {
+                    'tank': [tank_x, tank_y],
+                    'drone': [drone_x, drone_y]
+                }
+                
+                # Generate and visualize heatmap
+                print("Generating heatmap (this may take a moment)...")
+                heatmap = generate_battle_heatmap(model, enemy_position, unit_positions)
+                visualize_battle_heatmap(heatmap, enemy_position, unit_positions)
+                
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                
+        elif choice == '4':
+            print("Thank you for using Battle Strategy Advisor!")
+            break
+            
+        else:
+            print("Invalid choice. Please enter a number between 1 and 4.")
+            
+
+if __name__ == "__main__":
+    battle_advisor()
