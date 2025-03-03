@@ -136,7 +136,7 @@ def run_full_pipeline():
     # Step 1: Run simulation to generate data
     print("\n[STEP 1/3] Running battle simulations to generate training data...")
     num_battles = 10
-    max_steps = 30
+    max_steps = 100
     print(f"Generating {num_battles} battles with max {max_steps} steps each")
     run_simulation(num_battles=num_battles, max_steps=max_steps, render_final=True)
     

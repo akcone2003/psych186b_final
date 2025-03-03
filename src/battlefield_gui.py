@@ -9,9 +9,11 @@ import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 import threading
+import copy
 import queue
 import torch
 import random
@@ -112,12 +114,130 @@ class BattlefieldGUI(tk.Tk):
         """Show the latest battlefield grid-based visualization with terrain & weather from the simulation."""
         try:
             print("⚔️ Generating the latest battlefield grid visualization...")
-            show_latest_battlefield(file_path="data/battle_data.csv")
+            
+            # Create a fresh battlefield environment
+            env = BattlefieldEnv()
+            env.reset()  # Initialize a new battlefield
+            
+            # Clear the current figure and create a completely fresh one
+            self.viz_fig.clear()
+            ax = self.viz_fig.add_subplot(111)
+            
+            # Generate a grid for rendering
+            grid = np.zeros((env.grid_size, env.grid_size, 3))
+            
+            # Add terrain colors
+            for x in range(env.grid_size):
+                for y in range(env.grid_size):
+                    terrain = env.get_terrain_at([x, y])
+                    
+                    # Set terrain color based on type
+                    if terrain == "Plains":
+                        grid[x, y] = [0.7, 0.9, 0.5]  # Light green
+                    elif terrain == "Mountains":
+                        grid[x, y] = [0.7, 0.7, 0.7]  # Gray
+                    elif terrain == "Forest":
+                        grid[x, y] = [0.2, 0.6, 0.2]  # Dark green
+                    elif terrain == "Urban":
+                        grid[x, y] = [0.8, 0.8, 0.8]  # Light gray
+                    elif terrain == "Desert":
+                        grid[x, y] = [0.9, 0.8, 0.5]  # Sand color
+                    else:
+                        grid[x, y] = [1.0, 1.0, 1.0]  # White (default)
+            
+            # Add obstacles (black)
+            for obs_pos in env.obstacles:
+                grid[obs_pos[0], obs_pos[1]] = [0, 0, 0]
+            
+            # Display the grid in our figure
+            ax.imshow(grid)
+            
+            # Plot friendly units
+            for i, unit in enumerate(env.friendly_units):
+                if unit.is_alive():
+                    x, y = unit.position
+                    
+                    # Marker depends on type
+                    if unit.unit_type == UnitType.INFANTRY:
+                        marker = "o"  # Circle
+                    elif unit.unit_type == UnitType.ARMORED:
+                        marker = "s"  # Square
+                    elif unit.unit_type == UnitType.AERIAL:
+                        marker = "^"  # Triangle
+                    else:
+                        marker = "X"  # X
+                        
+                    # Use a simple version of the unit type name
+                    unit_type_str = str(unit.unit_type).split('.')[-1]
+                    
+                    # Plot on our axis
+                    ax.scatter(y, x, marker=marker, s=100, color='blue', label=unit_type_str)
+                    
+                    # Add health bar
+                    health_pct = unit.hp / unit.max_hp
+                    health_bar_width = 0.8
+                    health_bar_height = 0.1
+                    health_rect = patches.Rectangle(
+                        (y - health_bar_width/2, x + 0.3),
+                        health_bar_width * health_pct,
+                        health_bar_height,
+                        color='green'
+                    )
+                    ax.add_patch(health_rect)
+            
+            # Plot enemy units
+            for i, enemy in enumerate(env.enemies):
+                if enemy.is_alive():
+                    x, y = enemy.position
+                    
+                    # Marker depends on type
+                    if enemy.unit_type == UnitType.INFANTRY:
+                        marker = "o"  # Circle
+                    elif enemy.unit_type == UnitType.ARMORED:
+                        marker = "s"  # Square
+                    elif enemy.unit_type == UnitType.AERIAL:
+                        marker = "^"  # Triangle
+                    elif enemy.unit_type == UnitType.ARTILLERY:
+                        marker = "*"  # Star
+                    elif enemy.unit_type == UnitType.STEALTH:
+                        marker = "P"  # Pentagon
+                    else:
+                        marker = "X"  # X
+                        
+                    # Use a simple version of the unit type name
+                    enemy_type_str = str(enemy.unit_type).split('.')[-1]
+                    
+                    # Plot on our axis
+                    ax.scatter(y, x, marker=marker, s=100, color='red', label=enemy_type_str)
+                    
+                    # Add health bar
+                    health_pct = enemy.hp / enemy.max_hp
+                    health_bar_width = 0.8
+                    health_bar_height = 0.1
+                    health_rect = patches.Rectangle(
+                        (y - health_bar_width/2, x + 0.3),
+                        health_bar_width * health_pct,
+                        health_bar_height,
+                        color='red'
+                    )
+                    ax.add_patch(health_rect)
+            
+            # Add title
+            ax.set_title(f"Battlefield - Terrain: {env.current_terrain}, Weather: {env.current_weather}")
+            
+            # Add grid
+            ax.grid(True, color='black', linestyle='-', linewidth=0.5, alpha=0.2)
+            
+            # Update the canvas
+            self.viz_canvas.draw()
+            self.status_var.set("Battlefield visualization generated")
+            
         except Exception as e:
-            messagebox.showerror("Visualization Error", f"Could not display battlefield: {e}")
-            # Fallback to manual rendering if the battlefield_visuals module isn't available
-            if hasattr(self, 'battlefield_env') and self.battlefield_env is not None:
-                self.battlefield_env.render()
+            error_msg = f"Could not display battlefield: {str(e)}"
+            self.status_var.set(error_msg)
+            messagebox.showerror("Visualization Error", error_msg)
+            import traceback
+            traceback.print_exc()
 
     def get_optimal_actions(self):
         """Wrapper to call get_optimal_actions from battle_strategy.py"""
@@ -279,7 +399,7 @@ class BattlefieldGUI(tk.Tk):
         
         # Max steps per battle
         ttk.Label(params_frame, text="Max Steps per Battle:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
-        self.max_steps_var = tk.IntVar(value=30)
+        self.max_steps_var = tk.IntVar(value=100)
         ttk.Spinbox(params_frame, from_=10, to=100, textvariable=self.max_steps_var, width=5).grid(row=1, column=1, padx=5, pady=5, sticky='w')
         
         # Max enemies
@@ -538,7 +658,6 @@ class BattlefieldGUI(tk.Tk):
         max_steps = self.max_steps_var.get()
         max_enemies = self.max_enemies_var.get() if hasattr(self, 'max_enemies_var') else 3
         render_final = self.render_var.get() if hasattr(self, 'render_var') else True
-        output_file = self.output_file_var.get()
         
         # Clear log
         self.simulation_log.config(state=tk.NORMAL)
@@ -563,26 +682,39 @@ class BattlefieldGUI(tk.Tk):
                     progress = (battle / total) * 100
                     self.queue.put(("progress", progress))
                 
-                # Run simulation - use the enhanced battlefield
+                # Create a folder for battle images
+                os.makedirs('visualizations/battles', exist_ok=True)
+                
+                # Run simulation - use the enhanced battlefield but don't render during simulation
                 self.queue.put(("status", f"Running enhanced simulation with {num_battles} battles..."))
                 
+                try:
+                    from battlefield_env import run_simulation
+                except ImportError:
+                    from src.battlefield_env import run_simulation
+                    
+                # Don't render during simulation to avoid threading issues
                 results = run_simulation(
                     num_battles=num_battles, 
                     max_steps=max_steps, 
-                    max_enemies=max_enemies,
-                    render_final=render_final
+                    render_final=False,  # Important: don't render in thread
+                    max_enemies=max_enemies
                 )
-                
-                # Restore standard output
-                builtins.print = original_print
                 
                 self.queue.put(("status", "Simulation complete!"))
                 self.queue.put(("progress", 100))
                 
-                if render_final:
-                    self.queue.put(("log", "Visualization windows may remain open. Close them to continue."))
+                # Report battle results
+                self.queue.put(("log", f"\nSimulation results:"))
+                if isinstance(results, dict):
+                    for outcome, count in results.items():
+                        percentage = (count / num_battles) * 100
+                        self.queue.put(("log", f"{outcome.capitalize()}: {count} ({percentage:.1f}%)"))
                 
                 messagebox.showinfo("Success", f"Simulation completed with {num_battles} battles")
+                
+                # Restore standard output
+                builtins.print = original_print
                 
             except Exception as e:
                 self.queue.put(("status", f"Error: {e}"))

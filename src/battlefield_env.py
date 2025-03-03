@@ -15,6 +15,8 @@ import numpy as np
 import random
 import heapq
 import math
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from enum import Enum
@@ -518,12 +520,12 @@ class Enemy(Unit):
             type_factor = TYPE_ADVANTAGES[self.unit_type.value][unit.unit_type.value]
             
             # Combine factors into score
-            hp_factor = 1.0 - (unit.hp / unit.max_hp)  # Lower HP = higher value
+            hp_factor = 1.0 - (unit.hp / unit.max_hp) * 1.5 # Lower HP = higher value
             distance_factor = 1.0 - (distance / GRID_SIZE)  # Closer = higher value
             
             # Calculate final score
             target_score = (
-                (type_factor * 2) +  # Type advantage is most important
+                (type_factor * 2.5) +  # Type advantage is most important
                 (hp_factor * 1.5) +  # Low HP targets are tempting
                 (distance_factor * 1)  # Distance is less important
             )
@@ -562,7 +564,7 @@ class BattlefieldEnv(gym.Env):
     - Line of sight and stealth
     """
     
-    def __init__(self, grid_size=GRID_SIZE, max_enemies=3, max_steps=50):
+    def __init__(self, grid_size=GRID_SIZE, max_enemies=3, max_steps=100):
         """Initialize the battlefield environment"""
         super(BattlefieldEnv, self).__init__()
         
@@ -764,14 +766,14 @@ class BattlefieldEnv(gym.Env):
             )[0]
             
             # Randomize aggression
-            aggression = random.uniform(0.4, 0.9)
+            aggression = random.uniform(0.6, 0.95)
             
             # Create enemy with type-specific stats
             if enemy_type == UnitType.INFANTRY:
                 enemy = Enemy(
                     unit_type=enemy_type,
                     position=positions[i],
-                    hp=80,
+                    hp=100,
                     attack_power=12,
                     speed=2,
                     detection_range=2,
@@ -782,8 +784,8 @@ class BattlefieldEnv(gym.Env):
                 enemy = Enemy(
                     unit_type=enemy_type,
                     position=positions[i],
-                    hp=160,
-                    attack_power=25,
+                    hp=200, 
+                    attack_power=35,
                     speed=1,
                     detection_range=2,
                     stealth_level=0,
@@ -793,7 +795,7 @@ class BattlefieldEnv(gym.Env):
                 enemy = Enemy(
                     unit_type=enemy_type,
                     position=positions[i],
-                    hp=50,
+                    hp=60,
                     attack_power=15,
                     speed=3,
                     detection_range=3,
@@ -1029,7 +1031,16 @@ class BattlefieldEnv(gym.Env):
         friendly_alive = sum(1 for unit in self.friendly_units if unit.is_alive())
         enemies_alive = sum(1 for enemy in self.enemies if enemy.is_alive())
         
-        if enemies_alive == 0:
+        # Add a condition to end earlier with a defeat
+        if enemies_alive >= 2 and friendly_alive <= 1:
+            # Critical situation - likely defeat
+            done = True
+            reward -= 10
+            self.battle_outcome = "defeat"
+            info["result"] = "defeat"
+            info["message"] = "Critical unit disadvantage!"
+
+        elif enemies_alive == 0:
             # All enemies defeated - Victory!
             done = True
             reward += 10  # Big reward for victory
@@ -1112,9 +1123,9 @@ class BattlefieldEnv(gym.Env):
     
     def save_battle_log(self, filename=None):
         """Save the battle log to a CSV file for later analysis"""
-        # Default filename
+        # Always use a consistent filename if not specified
         if filename is None:
-            filename = f"data/battle_data_{self.current_terrain}_{self.current_weather}_{len(self.enemies)}_enemies.csv"
+            filename = "data/battle_data.csv"
         
         try:
             # Convert battle log to dataframe-compatible format
@@ -1165,16 +1176,28 @@ class BattlefieldEnv(gym.Env):
                 
                 processed_data.append(base_row)
             
-            # Convert to pandas DataFrame and save
+            # Convert to pandas DataFrame
             import pandas as pd
             df = pd.DataFrame(processed_data)
             
             # Ensure directory exists
             os.makedirs(os.path.dirname(filename), exist_ok=True)
             
-            # Save to CSV
-            df.to_csv(filename, index=False)
-            print(f"Battle log saved to {filename}")
+            # Check if file already exists - append if it does
+            if os.path.exists(filename):
+                # Load existing data
+                existing_df = pd.read_csv(filename)
+                
+                # Append new data
+                combined_df = pd.concat([existing_df, df], ignore_index=True)
+                
+                # Save combined data
+                combined_df.to_csv(filename, index=False)
+                print(f"Appended battle log to existing file: {filename}")
+            else:
+                # Save new file
+                df.to_csv(filename, index=False)
+                print(f"Battle log saved to {filename}")
             
             return filename
                 
@@ -1186,7 +1209,7 @@ class BattlefieldEnv(gym.Env):
             # Try an emergency backup
             try:
                 import time
-                emergency_filename = f"data/battle_log_emergency_{int(time.time())}.csv"
+                emergency_filename = f"data/battle_data_emergency_{int(time.time())}.csv"
                 
                 # Very simple CSV with minimal processing
                 with open(emergency_filename, 'w') as f:
@@ -1203,7 +1226,7 @@ class BattlefieldEnv(gym.Env):
                 print("Failed to save even emergency battle log!")
                 return None
     
-    def render(self, mode='human'):
+    def render(self, mode='human', save_path=None):
         """Render the battlefield"""
         if mode != 'human':
             return
@@ -1233,7 +1256,11 @@ class BattlefieldEnv(gym.Env):
         # Add obstacles (black)
         for obs_pos in self.obstacles:
             grid[obs_pos[0], obs_pos[1]] = [0, 0, 0]
-            
+        
+        # Create a new figure
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111)
+                
         # Plot friendly units (blue)
         for unit in self.friendly_units:
             if unit.is_alive():
@@ -1249,7 +1276,8 @@ class BattlefieldEnv(gym.Env):
                 else:
                     marker = "X"  # X
                     
-                plt.scatter(y, x, marker=marker, s=100, color='blue', label=unit.unit_type.name)
+                unit_type_str = str(unit.unit_type).split('.')[-1]  # Get just the name part safely
+                ax.scatter(y, x, marker=marker, s=100, color='blue', label=unit_type_str)
                 
                 # Add health bar
                 health_pct = unit.hp / unit.max_hp
@@ -1261,7 +1289,7 @@ class BattlefieldEnv(gym.Env):
                     health_bar_height,
                     color='green'
                 )
-                plt.gca().add_patch(health_rect)
+                ax.add_patch(health_rect)
                 
                 # Attack range indicator
                 attack_range = ATTACK_RANGES[unit.unit_type]
@@ -1273,7 +1301,7 @@ class BattlefieldEnv(gym.Env):
                     linestyle='--',
                     alpha=0.3
                 )
-                plt.gca().add_patch(range_circle)
+                ax.add_patch(range_circle)
         
         # Plot enemy units (red)
         for enemy in self.enemies:
@@ -1294,7 +1322,7 @@ class BattlefieldEnv(gym.Env):
                 else:
                     marker = "X"  # X
                     
-                plt.scatter(y, x, marker=marker, s=100, color='red', label=enemy.unit_type.name)
+                ax.scatter(y, x, marker=marker, s=100, color='red', label=enemy.unit_type.name)
                 
                 # Add health bar
                 health_pct = enemy.hp / enemy.max_hp
@@ -1306,21 +1334,24 @@ class BattlefieldEnv(gym.Env):
                     health_bar_height,
                     color='red'
                 )
-                plt.gca().add_patch(health_rect)
+                ax.add_patch(health_rect)
         
         # Set up grid
-        plt.imshow(grid)
-        plt.grid(True, color='black', linestyle='-', linewidth=0.5, alpha=0.2)
+        ax.imshow(grid)
+        ax.grid(True, color='black', linestyle='-', linewidth=0.5, alpha=0.2)
         
         # Add title with battle info
-        plt.title(f"Step: {self.step_count} | Weather: {self.current_weather} | Terrain: {self.current_terrain}")
+        ax.set_title(f"Step: {self.step_count} | Weather: {self.current_weather} | Terrain: {self.current_terrain}")
         
-        # Show plot
-        plt.tight_layout()
-        plt.show()
+        # Save the figure instead of showing it
+        if save_path:
+            fig.savefig(save_path)
+        
+        # Return the figure for external display
+        return fig
 
 
-def run_simulation(num_battles=10, max_steps=50, render_final=True, save_logs=True):
+def run_simulation(num_battles=10, max_steps=100, render_final=True, save_logs=True, max_enemies=3):
     """
     Run multiple battle simulations and collect data
     
@@ -1329,6 +1360,7 @@ def run_simulation(num_battles=10, max_steps=50, render_final=True, save_logs=Tr
         max_steps: Maximum steps per battle
         render_final: Whether to render the final state of battles
         save_logs: Whether to save battle logs
+        max_enemies: Maximum number of enemies per battle
     """
     print(f"Starting enhanced battlefield simulation with {num_battles} battles, max {max_steps} steps each")
     
@@ -1337,7 +1369,7 @@ def run_simulation(num_battles=10, max_steps=50, render_final=True, save_logs=Tr
     log_files = []
     
     # Create battlefield environment
-    env = BattlefieldEnv(max_steps=max_steps)
+    env = BattlefieldEnv(max_steps=max_steps, max_enemies=max_enemies)
     
     # Run simulations
     for battle_num in range(num_battles):
@@ -1424,4 +1456,4 @@ def run_simulation(num_battles=10, max_steps=50, render_final=True, save_logs=Tr
 
 if __name__ == "__main__":
     # Run a simulation with the enhanced battlefield
-    results = run_simulation(num_battles=5, max_steps=30, render_final=True)
+    results = run_simulation(num_battles=5, max_steps=100, render_final=True)

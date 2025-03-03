@@ -6,7 +6,11 @@ for maximizing battle victory probability.
 """
 import torch
 import numpy as np
-from src.lstm_model import load_model, predict_battle_outcome
+# Add flexible imports
+try:
+    from lstm_model import load_model, predict_battle_outcome
+except ImportError:
+    from src.lstm_model import load_model, predict_battle_outcome
 
 
 def get_optimal_actions(model, unit_positions, enemy_position):

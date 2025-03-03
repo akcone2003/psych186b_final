@@ -364,7 +364,16 @@ def predict_battle_outcome(model, battle_state):
         win_probability: Probability of victory (0-1)
     """
     # If input is BattlefieldEnv, extract state
-    from battlefield_env import BattlefieldEnv
+    # Try importing from both locations
+    try:
+        from battlefield_env import BattlefieldEnv
+    except ImportError:
+        try:
+            from src.battlefield_env import BattlefieldEnv
+        except ImportError:
+            # Just continue without it - we don't actually need it for basic prediction
+            pass
+        
     if isinstance(battle_state, BattlefieldEnv):
         # Extract relevant features from environment
         features = []
