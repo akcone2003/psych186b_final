@@ -28,6 +28,7 @@ try:
     from battlefield_env import run_simulation, BattlefieldEnv, ATTACK_RANGES, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
     from lstm_model import main as train_model, load_model, predict_battle_outcome
     from battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
+    from self_play import SelfPlaySimulation
     # Import visualization if available
     try:
         from battlefield_visuals import show_latest_battlefield
@@ -40,6 +41,7 @@ except ImportError:
     from src.battlefield_env import run_simulation, BattlefieldEnv, ATTACK_RANGES, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
     from src.lstm_model import main as train_model, load_model, predict_battle_outcome
     from src.battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
+    from src.self_play import SelfPlaySimulation
     # Import visualization if available
     try:
         from src.battlefield_visuals import show_latest_battlefield
@@ -80,12 +82,16 @@ class BattlefieldGUI(tk.Tk):
         self.training_tab = ttk.Frame(self.notebook)
         self.advisor_tab = ttk.Frame(self.notebook)
         self.visualization_tab = ttk.Frame(self.notebook)
+        self.self_play_tab = ttk.Frame(self.notebook)
+
         
         # Add tabs to notebook
-        self.notebook.add(self.simulation_tab, text="Run Simulation")
+        self.notebook.add(self.
+        simulation_tab, text="Run Simulation")
         self.notebook.add(self.training_tab, text="Train Model")
         self.notebook.add(self.advisor_tab, text="Battle Advisor")
         self.notebook.add(self.visualization_tab, text="Visualizations")
+        self.notebook.add(self.self_play_tab, text="Self-Play")
         
         # Pack notebook
         self.notebook.pack(expand=True, fill='both', padx=10, pady=10)
@@ -95,6 +101,7 @@ class BattlefieldGUI(tk.Tk):
         self._setup_training_tab()
         self._setup_advisor_tab()
         self._setup_visualization_tab()
+        self._setup_self_play_tab()
         
         # Initialize model
         self.model = None
@@ -109,6 +116,184 @@ class BattlefieldGUI(tk.Tk):
         
         # Check for required directories
         self._ensure_directories_exist()
+
+    def run_self_play(self):
+        """Run a self-play simulation where the model controls both sides"""
+        # Check if model is loaded
+        if self.model is None:
+            messagebox.showerror("Error", "Model not loaded. Please train or load a model first.")
+            return
+        
+        # Get parameters from GUI
+        try:
+            num_battles = self.self_play_battles_var.get()
+            max_steps = self.self_play_steps_var.get()
+            save_viz = self.self_play_save_viz_var.get()
+        except:
+            # If variables not defined yet, use defaults
+            num_battles = 1
+            max_steps = 50
+            save_viz = True
+        
+        # Update status
+        self.status_var.set("Starting self-play simulation...")
+        self.update()
+        
+        # Function to run in a separate thread
+        def run_simulation():
+            try:
+                # Create simulator
+                simulator = SelfPlaySimulation(
+                    model_path="models/best_battle_predictor.pt",
+                    max_steps=max_steps,
+                    save_visualizations=save_viz
+                )
+                
+                # Queue update
+                self.queue.put(("status", "Self-play simulation in progress..."))
+                
+                # Run simulation
+                if num_battles == 1:
+                    # Single battle with detailed logging
+                    result = simulator.run_self_play_battle(log_steps=True, render_battle=True)
+                    
+                    # Format result text
+                    result_text = f"Self-Play Battle Results\n\n"
+                    result_text += f"Outcome: {result['result']}\n"
+                    result_text += f"Blue Units Remaining: {result['blue_remaining']}/{result['blue_total']}\n"
+                    result_text += f"Red Units Remaining: {result['red_remaining']}/{result['red_total']}\n"
+                    
+                    # Queue results for display
+                    self.queue.put(("self_play_result", result_text))
+                    
+                else:
+                    # Multiple battles
+                    stats = simulator.run_multiple_battles(num_battles=num_battles, log_individual=False)
+                    
+                    # Calculate statistics
+                    win_rate_blue = stats['wins_blue'] / num_battles * 100
+                    win_rate_red = stats['wins_red'] / num_battles * 100
+                    draw_rate = stats['draws'] / num_battles * 100
+                    
+                    avg_steps = sum([sum(steps)/len(steps) for steps in stats['avg_steps']]) / len(stats['avg_steps']) if stats['avg_steps'] else 0
+                    
+                    avg_blue_remaining = sum(stats['blue_units_remaining']) / len(stats['blue_units_remaining']) if stats['blue_units_remaining'] else 0
+                    avg_red_remaining = sum(stats['red_units_remaining']) / len(stats['red_units_remaining']) if stats['red_units_remaining'] else 0
+                    
+                    # Format results text
+                    result_text = f"Self-Play Campaign Results ({num_battles} battles)\n\n"
+                    result_text += f"Blue Victory Rate: {win_rate_blue:.1f}%\n"
+                    result_text += f"Red Victory Rate: {win_rate_red:.1f}%\n"
+                    result_text += f"Draw Rate: {draw_rate:.1f}%\n\n"
+                    result_text += f"Average Battle Length: {avg_steps:.1f} steps\n"
+                    result_text += f"Average Blue Units Remaining: {avg_blue_remaining:.2f}\n"
+                    result_text += f"Average Red Units Remaining: {avg_red_remaining:.2f}\n\n"
+                    
+                    if save_viz:
+                        result_text += "Visualizations saved to 'visualizations/self_play/'"
+                    
+                    # Queue results for display
+                    self.queue.put(("self_play_result", result_text))
+                
+                # Update status when complete
+                self.queue.put(("status", "Self-play simulation complete"))
+                
+            except Exception as e:
+                # Log error
+                self.queue.put(("status", f"Error in self-play: {str(e)}"))
+                self.queue.put(("log", f"Self-play error: {str(e)}"))
+                import traceback
+                traceback.print_exc()
+        
+        # Run in a separate thread
+        import threading
+        thread = threading.Thread(target=run_simulation)
+        thread.daemon = True
+        thread.start()
+
+    # Add this new method to the BattlefieldGUI class to create the self-play tab:
+    def _setup_self_play_tab(self):
+        """Set up the self-play tab"""
+        # Header
+        header = ttk.Label(self.self_play_tab, text="Model Self-Play", style="Header.TLabel")
+        header.grid(row=0, column=0, columnspan=2, pady=10, sticky='w')
+        
+        # Frame for parameters
+        params_frame = ttk.LabelFrame(self.self_play_tab, text="Self-Play Parameters")
+        params_frame.grid(row=1, column=0, padx=10, pady=10, sticky='nw')
+        
+        # Number of battles
+        ttk.Label(params_frame, text="Number of Battles:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        self.self_play_battles_var = tk.IntVar(value=1)
+        ttk.Spinbox(params_frame, from_=1, to=50, textvariable=self.self_play_battles_var, width=5).grid(row=0, column=1, padx=5, pady=5, sticky='w')
+        
+        # Max steps per battle
+        ttk.Label(params_frame, text="Max Steps per Battle:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        self.self_play_steps_var = tk.IntVar(value=50)
+        ttk.Spinbox(params_frame, from_=10, to=200, textvariable=self.self_play_steps_var, width=5).grid(row=1, column=1, padx=5, pady=5, sticky='w')
+        
+        # Save visualizations checkbox
+        self.self_play_save_viz_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(params_frame, text="Save Battle Visualizations", variable=self.self_play_save_viz_var).grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky='w')
+        
+        # Battle descriptions
+        desc_frame = ttk.LabelFrame(params_frame, text="Battle Types")
+        desc_frame.grid(row=3, column=0, columnspan=2, padx=5, pady=5, sticky='we')
+        
+        # Single battle description
+        ttk.Label(desc_frame, text="Single Battle:").grid(row=0, column=0, padx=5, pady=2, sticky='w')
+        ttk.Label(desc_frame, text="Detailed step-by-step simulation with full logging", wraplength=300).grid(row=0, column=1, padx=5, pady=2, sticky='w')
+        
+        # Campaign description
+        ttk.Label(desc_frame, text="Campaign:").grid(row=1, column=0, padx=5, pady=2, sticky='w')
+        ttk.Label(desc_frame, text="Multiple battles with statistical summary at the end", wraplength=300).grid(row=1, column=1, padx=5, pady=2, sticky='w')
+        
+        # Run buttons
+        ttk.Button(params_frame, text="Run Single Battle", command=lambda: self.run_self_play()).grid(row=4, column=0, padx=5, pady=10, sticky='w')
+        ttk.Button(params_frame, text="Run Campaign", command=lambda: self._set_multiple_battles_and_run()).grid(row=4, column=1, padx=5, pady=10, sticky='w')
+        
+        # Results frame
+        results_frame = ttk.LabelFrame(self.self_play_tab, text="Self-Play Results")
+        results_frame.grid(row=1, column=1, rowspan=3, padx=10, pady=10, sticky='nsew')
+        
+        # Make the results frame expandable
+        self.self_play_tab.columnconfigure(1, weight=1)
+        self.self_play_tab.rowconfigure(3, weight=1)
+        
+        # Results text
+        self.self_play_results = tk.Text(results_frame, wrap=tk.WORD, width=50, height=20)
+        scrollbar = ttk.Scrollbar(results_frame, command=self.self_play_results.yview)
+        self.self_play_results.configure(yscrollcommand=scrollbar.set)
+        
+        self.self_play_results.grid(row=0, column=0, sticky='nsew')
+        scrollbar.grid(row=0, column=1, sticky='ns')
+        
+        # Make text widget expand
+        results_frame.columnconfigure(0, weight=1)
+        results_frame.rowconfigure(0, weight=1)
+        
+        # Display welcome text
+        welcome_text = """Welcome to Model Self-Play
+
+    The self-play feature allows the AI model to control both sides of the battlefield, providing insights into its tactical capabilities and strategic preferences.
+
+    You can run either:
+    • A single detailed battle with step-by-step logging
+    • A multi-battle campaign with statistical summary
+
+    To begin, make sure you have a trained model, then select your parameters and click one of the run buttons.
+
+    Battle visualizations will be saved to the 'visualizations/self_play' directory.
+    """
+        self.self_play_results.insert(tk.END, welcome_text)
+
+
+    def _set_multiple_battles_and_run(self):
+        """Helper to set multiple battles and run self-play"""
+        # Only set to multiple battles if currently set to 1
+        if self.self_play_battles_var.get() == 1:
+            self.self_play_battles_var.set(10)  # Default to 10 battles for campaign
+        self.run_self_play()
 
     def show_real_time_battlefield(self):
         """Show the latest battlefield grid-based visualization with terrain & weather from the simulation."""
@@ -663,7 +848,12 @@ class BattlefieldGUI(tk.Tk):
                     if hasattr(self, 'training_stats_text'):
                         self.training_stats_text.insert(tk.END, message[1] + "\n")
                         self.training_stats_text.see(tk.END)
+                elif message[0] == "self_play_result":
+                    if hasattr(self, 'self_play_results'):
+                        self.self_play_results.delete(1.0, tk.END)
+                        self.self_play_results.insert(tk.END, message[1])
                 self.queue.task_done()
+                
         except queue.Empty:
             pass
         self.after(100, self.process_queue)

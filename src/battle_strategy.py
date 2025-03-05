@@ -45,7 +45,6 @@ def get_optimal_actions(model, unit_positions, enemy_position):
     if input_size is None:
         input_size = 43  # Default if we can't determine from model
     
-    print(f"Model expects input size: {input_size}")
     
     # Try all action combinations (5 actions for each of 3 units = 125 combinations)
     for inf_action in range(5):
@@ -111,7 +110,6 @@ def get_optimal_positioning(model, enemy_position, grid_size=10, action_set=[0, 
     if input_size is None:
         input_size = 43  # Default if we can't determine from model
     
-    print(f"Model expects input size: {input_size}")
     
     # Helper to generate positions with various distances to enemy
     def generate_position_candidates(enemy_pos, grid_size, count=10):
@@ -230,7 +228,6 @@ def generate_battle_heatmap(model, enemy_position, unit_positions=None, actions=
     if input_size is None:
         input_size = 43  # Default if we can't determine from model
     
-    print(f"Model expects input size: {input_size}")
     
     # Create empty heatmap
     grid_size = 10

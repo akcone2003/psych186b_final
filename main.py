@@ -5,6 +5,7 @@ This script provides multiple interfaces for running the battlefield simulation:
 1. Command-line interface for running simulations, training models, and using the battle advisor
 2. GUI mode for interactive use (default)
 3. Full pipeline mode that runs all steps in sequence
+4. Self-play mode for model vs. model simulation
 
 When run directly without arguments, it will launch the GUI by default.
 """
@@ -20,12 +21,14 @@ try:
     from lstm_model import main as train_model
     from battle_strategy import battle_advisor
     from battlefield_gui import BattlefieldGUI
+    from self_play import run_self_play_demo
 except ImportError:
     # Fall back to src/ directory structure (original setup)
     from src.battlefield_env import run_simulation
     from src.lstm_model import main as train_model
     from src.battle_strategy import battle_advisor
     from src.battlefield_gui import BattlefieldGUI
+    from src.self_play import run_self_play_demo
 
 
 def main():
@@ -53,6 +56,15 @@ def main():
     advisor_parser = subparsers.add_parser('advisor', help='Run battle strategy advisor')
     advisor_parser.add_argument('--model', type=str, default='models/best_battle_predictor.pt',
                                 help='Path to trained model')
+    
+    # Self-play parser
+    selfplay_parser = subparsers.add_parser('selfplay', help='Run model self-play simulation')
+    selfplay_parser.add_argument('--model', type=str, default='models/best_battle_predictor.pt',
+                                help='Path to trained model')
+    selfplay_parser.add_argument('--battles', type=int, default=1,
+                               help='Number of battles to run')
+    selfplay_parser.add_argument('--steps', type=int, default=50,
+                               help='Maximum steps per battle')
     
     # GUI parser
     gui_parser = subparsers.add_parser('gui', help='Launch the GUI interface')
@@ -91,6 +103,16 @@ def main():
         print(f"Starting battle advisor with model {args.model}")
         battle_advisor(model_path=args.model)
     
+    elif args.command == 'selfplay':
+        # Check if model file exists
+        if not os.path.exists(args.model):
+            print(f"Error: Model file '{args.model}' not found")
+            print("Please run 'python main.py train' first to train a model")
+            return
+            
+        print(f"Starting self-play simulation with model {args.model}")
+        run_self_play_demo(model_path=args.model, num_battles=args.battles)
+    
     elif args.command == 'gui':
         launch_gui()
     
@@ -104,7 +126,7 @@ def main():
 
 def ensure_directories_exist():
     """Make sure all required directories exist"""
-    directories = ['data', 'models', 'visualizations']
+    directories = ['data', 'models', 'visualizations', 'visualizations/self_play']
     for directory in directories:
         os.makedirs(directory, exist_ok=True)
 
