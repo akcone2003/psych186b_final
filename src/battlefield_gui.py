@@ -272,63 +272,313 @@ class BattlefieldGUI(tk.Tk):
             traceback.print_exc()
 
     def get_optimal_actions(self):
-        """Wrapper to call get_optimal_actions from battle_strategy.py"""
+        """Get optimal actions for friendly units with multiple enemies support"""
         if self.model is None:
             messagebox.showerror("Error", "No model loaded")
             return
         
+        # Get friendly unit positions
         unit_positions = {
             'infantry': [self.inf_x_var.get(), self.inf_y_var.get()],
             'tank': [self.tank_x_var.get(), self.tank_y_var.get()],
             'drone': [self.drone_x_var.get(), self.drone_y_var.get()]
         }
-        enemy_position = [self.enemy_x_var.get(), self.enemy_y_var.get()]
         
-        best_actions, win_prob = get_optimal_actions(self.model, unit_positions, enemy_position)
+        # Get enemy positions
+        enemy_positions = []
+        for enemy_pos_vars in self.enemy_positions:
+            enemy_positions.append([enemy_pos_vars[0].get(), enemy_pos_vars[1].get()])
         
-        action_names = ['Move', 'Attack', 'Defend', 'Retreat', 'Support']
-        result_text = f"🎲 Optimal Strategy:\n\n"
-        result_text += f"Infantry: {action_names[best_actions[0]]}\n"
-        result_text += f"Tank: {action_names[best_actions[1]]}\n"
-        result_text += f"Drone: {action_names[best_actions[2]]}\n\n"
-        result_text += f"Victory probability: {win_prob:.2%}"
+        # Update status
+        self.status_var.set("Calculating optimal actions...")
+        self.update()
         
-        self.advisor_results.delete(1.0, tk.END)
-        self.advisor_results.insert(tk.END, result_text)
+        try:
+            # Call get_optimal_actions_multi_enemy for multiple enemies
+            if len(enemy_positions) > 1:
+                best_actions, win_prob = self.get_optimal_actions_multi_enemy(
+                    self.model, unit_positions, enemy_positions)
+            else:
+                # Use the original function for a single enemy
+                best_actions, win_prob = get_optimal_actions(
+                    self.model, unit_positions, enemy_positions[0])
+            
+            action_names = ['Move', 'Attack', 'Defend', 'Retreat', 'Support']
+            result_text = f"🎲 Optimal Strategy:\n\n"
+            result_text += f"Infantry: {action_names[best_actions[0]]}\n"
+            result_text += f"Tank: {action_names[best_actions[1]]}\n"
+            result_text += f"Drone: {action_names[best_actions[2]]}\n\n"
+            result_text += f"Victory probability: {win_prob:.2%}"
+            
+            self.advisor_results.delete(1.0, tk.END)
+            self.advisor_results.insert(tk.END, result_text)
+            
+            # Reset status
+            self.status_var.set("Ready")
+        except Exception as e:
+            self.status_var.set(f"Error: {e}")
+            messagebox.showerror("Error", f"An error occurred: {e}")
+
+    def get_optimal_actions_multi_enemy(self, model, unit_positions, enemy_positions):
+        """
+        Determine optimal actions for friendly units against multiple enemies
+        
+        Parameters:
+            model: The trained LSTM model
+            unit_positions: Dictionary with position of each friendly unit
+            enemy_positions: List of enemy position coordinates
+            
+        Returns:
+            best_actions: List of optimal actions [infantry, tank, drone]
+            win_probability: Probability of victory with those actions
+        """
+        # Initialize with default actions
+        best_actions = [0, 0, 0]  # Default move actions
+        best_prob = 0
+        
+        # Get expected input size
+        input_size = self._get_model_input_size(model)
+        
+        # Try all action combinations
+        for inf_action in range(5):
+            for tank_action in range(5):
+                for drone_action in range(5):
+                    actions = [inf_action, tank_action, drone_action]
+                    
+                    # Calculate probabilities against each enemy
+                    enemy_probs = []
+                    for enemy_position in enemy_positions:
+                        # Construct battle state
+                        base_battle_state = [
+                            unit_positions['infantry'][0], unit_positions['infantry'][1],
+                            unit_positions['tank'][0], unit_positions['tank'][1],
+                            unit_positions['drone'][0], unit_positions['drone'][1],
+                            inf_action, tank_action, drone_action,
+                            enemy_position[0], enemy_position[1]
+                        ]
+                        
+                        # Pad to expected input size
+                        battle_state = self._pad_feature_vector(base_battle_state, input_size)
+                        
+                        # Get win probability against this enemy
+                        prob = predict_battle_outcome(model, battle_state)
+                        enemy_probs.append(prob)
+                    
+                    # Calculate overall probability (can be min, average, or other combination)
+                    # Here we use the average probability across all enemies
+                    avg_prob = sum(enemy_probs) / len(enemy_probs)
+                    
+                    # Update if better
+                    if avg_prob > best_prob:
+                        best_prob = avg_prob
+                        best_actions = [inf_action, tank_action, drone_action]
+        
+        return best_actions, best_prob
 
     def get_optimal_positioning(self):
-        """Wrapper to call get_optimal_positioning from battle_strategy.py"""
+        """Get optimal positions against multiple enemies"""
         if self.model is None:
             messagebox.showerror("Error", "Model not loaded")
             return
             
-        enemy_position = [self.enemy_x_var.get(), self.enemy_y_var.get()]
+        # Get enemy positions
+        enemy_positions = []
+        for enemy_pos_vars in self.enemy_positions:
+            enemy_positions.append([enemy_pos_vars[0].get(), enemy_pos_vars[1].get()])
         
         # Update status
         self.status_var.set("Calculating optimal positions...")
         self.update()
         
-        best_positions, win_prob = get_optimal_positioning(self.model, enemy_position)
+        try:
+            # Call function with or without multiple enemies
+            if len(enemy_positions) > 1:
+                best_positions, win_prob = self.get_optimal_positions_multi_enemy(
+                    self.model, enemy_positions)
+            else:
+                # Use the original function for a single enemy
+                best_positions, win_prob = get_optimal_positioning(
+                    self.model, enemy_positions[0])
+            
+            result_text = f"🎯 Optimal Unit Positions:\n\n"
+            result_text += f"Infantry: {best_positions['infantry']}\n"
+            result_text += f"Tank: {best_positions['tank']}\n"
+            result_text += f"Drone: {best_positions['drone']}\n\n"
+            result_text += f"Victory probability: {win_prob:.2%}"
+            
+            self.advisor_results.delete(1.0, tk.END)
+            self.advisor_results.insert(tk.END, result_text)
+            
+            # Update the input fields with the optimal positions
+            self.inf_x_var.set(best_positions['infantry'][0])
+            self.inf_y_var.set(best_positions['infantry'][1])
+            self.tank_x_var.set(best_positions['tank'][0])
+            self.tank_y_var.set(best_positions['tank'][1])
+            self.drone_x_var.set(best_positions['drone'][0])
+            self.drone_y_var.set(best_positions['drone'][1])
+            
+            # Reset status
+            self.status_var.set("Ready")
+        except Exception as e:
+            self.status_var.set(f"Error: {e}")
+            messagebox.showerror("Error", f"An error occurred: {e}")
+
+    def get_optimal_positions_multi_enemy(self, model, enemy_positions):
+        """
+        Find optimal positions against multiple enemies
         
-        result_text = f"🎯 Optimal Unit Positions:\n\n"
-        result_text += f"Infantry: {best_positions['infantry']}\n"
-        result_text += f"Tank: {best_positions['tank']}\n"
-        result_text += f"Drone: {best_positions['drone']}\n\n"
-        result_text += f"Victory probability: {win_prob:.2%}"
+        Parameters:
+            model: Trained LSTM model
+            enemy_positions: List of enemy position coordinates
+            
+        Returns:
+            best_positions: Dictionary with optimal positions for each unit
+            win_probability: Probability of victory with those positions
+        """
+        best_positions = {
+            'infantry': [0, 0],
+            'tank': [0, 0],
+            'drone': [0, 0]
+        }
+        best_prob = 0
         
-        self.advisor_results.delete(1.0, tk.END)
-        self.advisor_results.insert(tk.END, result_text)
+        # Get expected input size
+        input_size = self._get_model_input_size(model)
+        grid_size = 10
         
-        # Update the input fields with the optimal positions
-        self.inf_x_var.set(best_positions['infantry'][0])
-        self.inf_y_var.set(best_positions['infantry'][1])
-        self.tank_x_var.set(best_positions['tank'][0])
-        self.tank_y_var.set(best_positions['tank'][1])
-        self.drone_x_var.set(best_positions['drone'][0])
-        self.drone_y_var.set(best_positions['drone'][1])
+        # Sample positions (full grid search would be 10^6 combinations)
+        # Instead, we'll use strategic sampling
+        samples = 30  # Number of sample positions to try per unit
+        positions_tried = 0
         
-        # Reset status
-        self.status_var.set("Ready")
+        # Generate position candidates for each unit
+        infantry_positions = self._generate_position_candidates(samples, grid_size)
+        tank_positions = self._generate_position_candidates(samples, grid_size)
+        drone_positions = self._generate_position_candidates(samples, grid_size)
+        
+        # Try different position combinations
+        for inf_pos in infantry_positions:
+            for tank_pos in tank_positions:
+                # Skip if units overlap
+                if inf_pos == tank_pos:
+                    continue
+                    
+                for drone_pos in drone_positions:
+                    # Skip if units overlap
+                    if drone_pos == inf_pos or drone_pos == tank_pos:
+                        continue
+                    
+                    positions_tried += 1
+                    
+                    # Calculate probabilities against each enemy
+                    enemy_probs = []
+                    for enemy_position in enemy_positions:
+                        # Skip if any unit is on an enemy
+                        if inf_pos == enemy_position or tank_pos == enemy_position or drone_pos == enemy_position:
+                            continue
+                            
+                        # Construct basic battle state
+                        base_battle_state = [
+                            inf_pos[0], inf_pos[1],
+                            tank_pos[0], tank_pos[1],
+                            drone_pos[0], drone_pos[1],
+                            0, 0, 0,  # Default actions
+                            enemy_position[0], enemy_position[1]
+                        ]
+                        
+                        # Pad the battle state
+                        battle_state = self._pad_feature_vector(base_battle_state, input_size)
+                        
+                        # Get win probability against this enemy
+                        prob = predict_battle_outcome(model, battle_state)
+                        enemy_probs.append(prob)
+                    
+                    # Skip if we don't have probabilities for all enemies
+                    if len(enemy_probs) != len(enemy_positions):
+                        continue
+                    
+                    # Calculate overall probability (using average)
+                    avg_prob = sum(enemy_probs) / len(enemy_probs)
+                    
+                    # Update if better
+                    if avg_prob > best_prob:
+                        best_prob = avg_prob
+                        best_positions = {
+                            'infantry': inf_pos,
+                            'tank': tank_pos,
+                            'drone': drone_pos
+                        }
+        
+        print(f"Evaluated {positions_tried} position combinations")
+        return best_positions, best_prob
+
+    def _generate_position_candidates(self, count, grid_size):
+        """
+        Generate a list of candidate positions for unit placement
+        
+        Parameters:
+            count: Number of positions to generate
+            grid_size: Size of the battlefield grid
+            
+        Returns:
+            positions: List of [x, y] position coordinates
+        """
+        positions = []
+        
+        # Add some positions along the edges
+        for _ in range(count // 4):
+            if random.random() < 0.5:
+                # Edge of the grid
+                x = random.choice([0, 1, grid_size-2, grid_size-1])
+                y = random.randint(0, grid_size-1)
+            else:
+                # Edge of the grid
+                y = random.choice([0, 1, grid_size-2, grid_size-1])
+                x = random.randint(0, grid_size-1)
+            positions.append([x, y])
+        
+        # Add some positions near the center
+        for _ in range(count // 4):
+            x = random.randint(grid_size//4, 3*grid_size//4)
+            y = random.randint(grid_size//4, 3*grid_size//4)
+            positions.append([x, y])
+        
+        # Add completely random positions for the remainder
+        remaining = count - len(positions)
+        for _ in range(remaining):
+            x = random.randint(0, grid_size-1)
+            y = random.randint(0, grid_size-1)
+            positions.append([x, y])
+        
+        return positions
+
+    def _get_model_input_size(self, model):
+        """Helper function to determine model's input size"""
+        # Default input size
+        input_size = 43
+        
+        # Try to infer from model architecture
+        for param in model.parameters():
+            if len(param.shape) >= 2:
+                # First layer's weight matrix should have shape [hidden_size, input_size]
+                input_size = param.shape[1]
+                break
+                
+        return input_size
+
+    def _pad_feature_vector(self, features, target_size):
+        """Pad feature vector to match expected model input size"""
+        current_size = len(features)
+        
+        if current_size == target_size:
+            return features
+        
+        if current_size > target_size:
+            # Truncate if too large
+            return features[:target_size]
+        
+        # Pad with zeros
+        return features + [0.0] * (target_size - current_size)
 
     def show_heatmap(self):
         """Wrapper to show heatmap using generate_battle_heatmap"""
@@ -450,6 +700,10 @@ class BattlefieldGUI(tk.Tk):
         
         # Render checkbox
         self.render_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton
+
+        # Render checkbox
+        self.render_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(params_frame, text="Render Final States", variable=self.render_var).grid(row=4, column=0, columnspan=2, padx=5, pady=5, sticky='w')
         
         # Run button
@@ -555,11 +809,9 @@ class BattlefieldGUI(tk.Tk):
         self.training_fig = plt.Figure(figsize=(6, 4), dpi=100)
         self.training_canvas = FigureCanvasTkAgg(self.training_fig, plot_frame)
         self.training_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=1)
-
-
         
     def _setup_advisor_tab(self):
-        """Set up the battle advisor tab"""
+        """Set up the battle advisor tab with multi-enemy support"""
         # Header
         header = ttk.Label(self.advisor_tab, text="Battle Strategy Advisor", style="Header.TLabel")
         header.grid(row=0, column=0, columnspan=2, pady=10, sticky='w')
@@ -568,6 +820,7 @@ class BattlefieldGUI(tk.Tk):
         positions_frame = ttk.LabelFrame(self.advisor_tab, text="Unit Positions")
         positions_frame.grid(row=1, column=0, padx=10, pady=10, sticky='nw')
         
+        # Friendly unit positions (same as before)
         # Infantry position
         ttk.Label(positions_frame, text="Infantry Position:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         self.inf_x_var = tk.IntVar(value=3)
@@ -595,25 +848,49 @@ class BattlefieldGUI(tk.Tk):
         ttk.Label(positions_frame, text="Y:").grid(row=2, column=3, padx=5, pady=5, sticky='w')
         ttk.Spinbox(positions_frame, from_=0, to=9, textvariable=self.drone_y_var, width=3).grid(row=2, column=4, padx=5, pady=5, sticky='w')
         
-        # Enemy position
-        ttk.Label(positions_frame, text="Enemy Position:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
-        self.enemy_x_var = tk.IntVar(value=8)
-        self.enemy_y_var = tk.IntVar(value=8)
-        ttk.Label(positions_frame, text="X:").grid(row=3, column=1, padx=5, pady=5, sticky='w')
-        ttk.Spinbox(positions_frame, from_=0, to=9, textvariable=self.enemy_x_var, width=3).grid(row=3, column=2, padx=5, pady=5, sticky='w')
-        ttk.Label(positions_frame, text="Y:").grid(row=3, column=3, padx=5, pady=5, sticky='w')
-        ttk.Spinbox(positions_frame, from_=0, to=9, textvariable=self.enemy_y_var, width=3).grid(row=3, column=4, padx=5, pady=5, sticky='w')
+        # NEW: Enemy count selector
+        ttk.Label(positions_frame, text="Number of Enemies:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        self.enemy_count_var = tk.IntVar(value=1)
+        enemy_count_spinner = ttk.Spinbox(positions_frame, from_=1, to=5, textvariable=self.enemy_count_var, width=3)
+        enemy_count_spinner.grid(row=3, column=1, columnspan=2, padx=5, pady=5, sticky='w')
         
-        # Terrain and weather dropdowns (new in enhanced version)
-        ttk.Label(positions_frame, text="Terrain:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
+        # FIXED: Add an update button instead of bindings
+        ttk.Button(positions_frame, text="Update", command=self._update_enemy_inputs).grid(row=3, column=3, padx=5, pady=5)
+        
+        # NEW: Create a scrollable frame for enemy positions
+        enemy_scroll_frame = ttk.Frame(positions_frame)
+        enemy_scroll_frame.grid(row=4, column=0, columnspan=5, padx=5, pady=5, sticky='nw')
+        
+        # Create canvas and scrollbar for enemy positions
+        self.enemy_canvas = tk.Canvas(enemy_scroll_frame, width=350, height=150)
+        self.enemy_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        enemy_scrollbar = ttk.Scrollbar(enemy_scroll_frame, orient=tk.VERTICAL, command=self.enemy_canvas.yview)
+        enemy_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.enemy_canvas.configure(yscrollcommand=enemy_scrollbar.set)
+        self.enemy_canvas.bind('<Configure>', lambda e: self.enemy_canvas.configure(scrollregion=self.enemy_canvas.bbox('all')))
+        
+        # Inner frame for enemy positions
+        self.enemy_frame = ttk.Frame(self.enemy_canvas)
+        self.enemy_canvas.create_window((0, 0), window=self.enemy_frame, anchor='nw')
+        
+        # Initialize enemy position variables
+        self.enemy_positions = []  # Will hold lists of [x_var, y_var] for each enemy
+        
+        # Create initial enemy input
+        self._update_enemy_inputs()
+        
+        # Terrain and weather dropdowns
+        ttk.Label(positions_frame, text="Terrain:").grid(row=5, column=0, padx=5, pady=5, sticky='w')
         self.terrain_var = tk.StringVar(value="Plains")
         ttk.Combobox(positions_frame, textvariable=self.terrain_var, values=list(TERRAIN_TYPES.keys()), 
-                   state="readonly", width=10).grid(row=4, column=1, columnspan=2, padx=5, pady=5, sticky='w')
+                state="readonly", width=10).grid(row=5, column=1, columnspan=2, padx=5, pady=5, sticky='w')
         
-        ttk.Label(positions_frame, text="Weather:").grid(row=5, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(positions_frame, text="Weather:").grid(row=6, column=0, padx=5, pady=5, sticky='w')
         self.weather_var = tk.StringVar(value="Clear")
         ttk.Combobox(positions_frame, textvariable=self.weather_var, values=list(WEATHER_CONDITIONS.keys()), 
-                    state="readonly", width=10).grid(row=5, column=1, columnspan=2, padx=5, pady=5, sticky='w')
+                    state="readonly", width=10).grid(row=6, column=1, columnspan=2, padx=5, pady=5, sticky='w')
         
         # Action buttons
         actions_frame = ttk.LabelFrame(self.advisor_tab, text="Advisory Actions")
@@ -623,7 +900,7 @@ class BattlefieldGUI(tk.Tk):
         ttk.Button(actions_frame, text="Get Optimal Positions", command=self.get_optimal_positioning).grid(row=1, column=0, padx=5, pady=5, sticky='w')
         ttk.Button(actions_frame, text="Generate Heatmap", command=self.show_heatmap).grid(row=2, column=0, padx=5, pady=5, sticky='w')
         
-        # Create simulation button (new in enhanced version)
+        # Create simulation button
         ttk.Button(actions_frame, text="Run Interactive Battle", command=self.run_interactive_battle).grid(row=3, column=0, padx=5, pady=5, sticky='w')
         
         # Results frame
@@ -645,7 +922,51 @@ class BattlefieldGUI(tk.Tk):
         # Make text widget expand
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
-    
+
+    def _update_enemy_inputs(self, event=None):
+        """Update the enemy position inputs based on the enemy count"""
+        # Clear existing enemy frame
+        for widget in self.enemy_frame.winfo_children():
+            widget.destroy()
+        
+        # Preserve existing enemy positions when possible
+        old_positions = self.enemy_positions
+        self.enemy_positions = []
+        
+        # Create inputs for each enemy
+        for i in range(self.enemy_count_var.get()):
+            # Create frame for this enemy
+            enemy_row = ttk.Frame(self.enemy_frame)
+            enemy_row.pack(fill=tk.X, padx=5, pady=2)
+            
+            # Create label
+            ttk.Label(enemy_row, text=f"Enemy {i+1}:").pack(side=tk.LEFT, padx=5)
+            
+            # Create X input
+            ttk.Label(enemy_row, text="X:").pack(side=tk.LEFT, padx=2)
+            # Default position or preserve existing
+            if i < len(old_positions):
+                x_var = tk.IntVar(value=old_positions[i][0].get())
+            else:
+                x_var = tk.IntVar(value=8)  # Default X position
+            ttk.Spinbox(enemy_row, from_=0, to=9, textvariable=x_var, width=3).pack(side=tk.LEFT, padx=2)
+            
+            # Create Y input
+            ttk.Label(enemy_row, text="Y:").pack(side=tk.LEFT, padx=2)
+            # Default position or preserve existing
+            if i < len(old_positions):
+                y_var = tk.IntVar(value=old_positions[i][1].get())
+            else:
+                y_var = tk.IntVar(value=8)  # Default Y position
+            ttk.Spinbox(enemy_row, from_=0, to=9, textvariable=y_var, width=3).pack(side=tk.LEFT, padx=2)
+            
+            # Store the variables
+            self.enemy_positions.append([x_var, y_var])
+        
+        # Adjust canvas scroll region
+        self.enemy_canvas.update_idletasks()
+        self.enemy_canvas.configure(scrollregion=self.enemy_canvas.bbox('all'))
+
     def _setup_visualization_tab(self):
         """Set up the visualization tab with enhanced options"""
         # Header
@@ -682,295 +1003,4 @@ class BattlefieldGUI(tk.Tk):
                                     values=list(WEATHER_CONDITIONS.keys()), state="readonly")
         weather_combo.grid(row=4, column=1, columnspan=2, padx=5, pady=5, sticky='w')
         
-        # Create a button to generate the environmental impact visualization
-        ttk.Button(controls_frame, text="Analyze Environment Impact", 
-                  command=self.show_environment_impact).grid(row=5, column=0, columnspan=3, padx=5, pady=10)
-
-        # Placeholder for visualization
-        self.viz_fig = plt.Figure(figsize=(6, 6), dpi=100)
-        self.viz_canvas = FigureCanvasTkAgg(self.viz_fig, self.visualization_tab)
-        self.viz_canvas.get_tk_widget().grid(row=1, column=1, rowspan=3, padx=5, pady=5, sticky='nsew')
-        
-        # Make the visualization column expandable
-        self.visualization_tab.columnconfigure(1, weight=1)
-        self.visualization_tab.rowconfigure(1, weight=1)
-    
-    def update_viz_controls(self, event=None):
-        """Update visualization controls based on selected type"""
-        # Not needed anymore - we've restructured the visualization tab
-        pass
-    
-    def browse_file(self, var):
-        """Open file browser and update the variable"""
-        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
-        if filename:
-            var.set(filename)
-    
-    def run_simulation(self):
-        """Run battle simulation with enhanced parameters"""
-        # Check if directories exist
-        os.makedirs('data', exist_ok=True)
-        
-        # Get parameters
-        num_battles = self.num_battles_var.get()
-        max_steps = self.max_steps_var.get()
-        max_enemies = self.max_enemies_var.get() if hasattr(self, 'max_enemies_var') else 3
-        render_final = self.render_var.get() if hasattr(self, 'render_var') else True
-        
-        # Clear log
-        self.simulation_log.config(state=tk.NORMAL)
-        self.simulation_log.delete(1.0, tk.END)
-        self.simulation_log.config(state=tk.DISABLED)
-        
-        # Create a custom print function that writes to our log
-        def custom_print(*args, **kwargs):
-            message = " ".join(map(str, args))
-            self.queue.put(("log", message))
-        
-        # Start simulation in a separate thread
-        def run_sim_thread():
-            try:
-                # Redirect standard output to our custom print function
-                import builtins
-                original_print = builtins.print
-                builtins.print = custom_print
-                
-                # Set up progress updates
-                def progress_callback(battle, total):
-                    progress = (battle / total) * 100
-                    self.queue.put(("progress", progress))
-                
-                # Create a folder for battle images
-                os.makedirs('visualizations/battles', exist_ok=True)
-                
-                # Run simulation - use the enhanced battlefield but don't render during simulation
-                self.queue.put(("status", f"Running enhanced simulation with {num_battles} battles..."))
-                
-                try:
-                    from battlefield_env import run_simulation
-                except ImportError:
-                    from src.battlefield_env import run_simulation
-                    
-                # Don't render during simulation to avoid threading issues
-                results = run_simulation(
-                    num_battles=num_battles, 
-                    max_steps=max_steps, 
-                    render_final=False,  # Important: don't render in thread
-                    max_enemies=max_enemies
-                )
-                
-                self.queue.put(("status", "Simulation complete!"))
-                self.queue.put(("progress", 100))
-                
-                # Report battle results
-                self.queue.put(("log", f"\nSimulation results:"))
-                if isinstance(results, dict):
-                    for outcome, count in results.items():
-                        percentage = (count / num_battles) * 100
-                        self.queue.put(("log", f"{outcome.capitalize()}: {count} ({percentage:.1f}%)"))
-                
-                messagebox.showinfo("Success", f"Simulation completed with {num_battles} battles")
-                
-                # Restore standard output
-                builtins.print = original_print
-                
-            except Exception as e:
-                self.queue.put(("status", f"Error: {e}"))
-                self.queue.put(("log", f"ERROR: {e}"))
-                messagebox.showerror("Error", f"An error occurred: {e}")
-        
-        # Start thread
-        sim_thread = threading.Thread(target=run_sim_thread)
-        sim_thread.daemon = True
-        sim_thread.start()
-    
-    def run_interactive_battle(self):
-        """Run an interactive battle with the current battlefield parameters"""
-        try:
-            # Initialize battlefield environment
-            env = BattlefieldEnv()
-            self.battlefield_env = env
-            
-            # Set custom positions if needed
-            # This would need to modify the battlefield environment directly
-            
-            # Just render the battlefield for now
-            env.render()
-            
-            # Store for future reference
-            self.battlefield_env = env
-            
-            # Add the battlefield view to the results
-            self.advisor_results.delete(1.0, tk.END)
-            self.advisor_results.insert(tk.END, "Interactive battle initialized!\n\n")
-            self.advisor_results.insert(tk.END, f"Terrain: {env.current_terrain}\n")
-            self.advisor_results.insert(tk.END, f"Weather: {env.current_weather}\n\n")
-            self.advisor_results.insert(tk.END, f"Friendly Units: {len(env.friendly_units)}\n")
-            self.advisor_results.insert(tk.END, f"Enemy Units: {len(env.enemies)}\n")
-            
-            # Display unit types
-            self.advisor_results.insert(tk.END, "\nFriendly Unit Types:\n")
-            for i, unit in enumerate(env.friendly_units):
-                self.advisor_results.insert(tk.END, f"Unit {i+1}: {unit.unit_type.name}\n")
-            
-            self.advisor_results.insert(tk.END, "\nEnemy Unit Types:\n")
-            for i, enemy in enumerate(env.enemies):
-                self.advisor_results.insert(tk.END, f"Enemy {i+1}: {enemy.unit_type.name}\n")
-                
-        except Exception as e:
-            self.status_var.set(f"Error running interactive battle: {e}")
-            messagebox.showerror("Error", f"Could not initialize battlefield: {e}")
-    
-    def show_environment_impact(self):
-        """Show the impact of different terrain and weather on battle outcomes"""
-        # Create a new window for the visualization
-        impact_window = tk.Toplevel(self)
-        impact_window.title("Environment Impact Analysis")
-        impact_window.geometry("800x600")
-        
-        # Create figure
-        fig = plt.Figure(figsize=(10, 8))
-        
-        # Create subplots for terrain and weather
-        ax1 = fig.add_subplot(211)
-        ax2 = fig.add_subplot(212)
-        
-        # Example data (in a real implementation, this would come from analysis of battle data)
-        terrain_types = list(TERRAIN_TYPES.keys())
-        terrain_win_rates = [0.65, 0.45, 0.55, 0.60, 0.50]  # Example win rates for different terrains
-        
-        weather_types = list(WEATHER_CONDITIONS.keys())
-        weather_win_rates = [0.60, 0.45, 0.50, 0.40, 0.55]  # Example win rates for different weather
-        
-        # Plot terrain impact
-        terrain_bars = ax1.bar(terrain_types, terrain_win_rates, color='green', alpha=0.7)
-        ax1.set_ylim(0, 1.0)
-        ax1.set_ylabel("Win Rate")
-        ax1.set_title("Impact of Terrain on Battle Outcomes")
-        ax1.grid(axis='y', linestyle='--', alpha=0.3)
-        
-        # Add value labels
-        for bar, rate in zip(terrain_bars, terrain_win_rates):
-            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
-                    f"{rate:.0%}", ha='center', va='bottom')
-        
-        # Plot weather impact
-        weather_bars = ax2.bar(weather_types, weather_win_rates, color='blue', alpha=0.7)
-        ax2.set_ylim(0, 1.0)
-        ax2.set_ylabel("Win Rate")
-        ax2.set_title("Impact of Weather on Battle Outcomes")
-        ax2.grid(axis='y', linestyle='--', alpha=0.3)
-        
-        # Add value labels
-        for bar, rate in zip(weather_bars, weather_win_rates):
-            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
-                    f"{rate:.0%}", ha='center', va='bottom')
-        
-        # Set layout
-        fig.tight_layout()
-        
-        # Embed in window
-        canvas = FigureCanvasTkAgg(fig, master=impact_window)
-        canvas.draw()
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-    
-    def train_model(self):
-        """Trigger the model training from lstm_model.py"""
-        # Check if data file exists
-        data_file = self.data_file_var.get()
-        if not os.path.exists(data_file):
-            messagebox.showerror("Error", f"Data file {data_file} not found. Please run simulation first.")
-            return
-        
-        # Get parameters
-        model_path = self.model_path_var.get()
-        
-        # Ensure directories exist
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        os.makedirs('visualizations', exist_ok=True)
-        
-        # Clear previous text and plot
-        self.training_stats_text.delete(1.0, tk.END)
-        self.training_fig.clear()
-        
-        # Start training in a separate thread
-        def train_thread():
-            try:
-                self.queue.put(("status", "Starting model training..."))
-                self.queue.put(("progress", 10))
-                
-                # Create a custom print function that updates the GUI
-                def custom_print(*args, **kwargs):
-                    message = " ".join(map(str, args))
-                    # Use queue for thread safety
-                    self.queue.put(("training_stats", message))
-                
-                # Temporarily redirect stdout for training functions
-                import builtins
-                original_print = builtins.print
-                builtins.print = custom_print
-                
-                try:
-                    # Define our wrapper function for progress updates
-                    def progress_callback(epoch, epochs, train_loss, test_loss, accuracy):
-                        progress = int((epoch / epochs) * 100)
-                        self.queue.put(("progress", progress))
-                        message = f"Epoch {epoch}/{epochs} | Train Loss: {train_loss:.4f} | Test Loss: {test_loss:.4f} | Accuracy: {accuracy:.2f}%"
-                        self.queue.put(("training_stats", message))
-                    
-                    # Import training module
-                    try:
-                        from lstm_model import load_and_preprocess_data, train_lstm_model, LSTMBattlePredictor
-                    except ImportError:
-                        from src.lstm_model import load_and_preprocess_data, train_lstm_model, LSTMBattlePredictor
-                    
-                    # Load and preprocess data
-                    self.queue.put(("training_stats", f"Loading data from {data_file}..."))
-                    train_loader, test_loader, input_size, _ = load_and_preprocess_data(data_file)
-                    
-                    # Train model
-                    self.queue.put(("training_stats", "Starting model training..."))
-                    model = train_lstm_model(train_loader, test_loader, input_size)
-                    
-                    # After training completes, load the trained model
-                    self.model = model
-                    
-                    # Update final status
-                    self.queue.put(("status", "Training complete! Model loaded successfully."))
-                    self.queue.put(("progress", 100))
-                    self.queue.put(("training_stats", "Training complete! Model saved as 'best_battle_predictor.pt'"))
-                    
-                    # Update the training plot if possible
-                    try:
-                        if os.path.exists("visualizations/battle_predictor_training.png"):
-                            from PIL import Image, ImageTk
-                            img = Image.open("visualizations/battle_predictor_training.png")
-                            img = img.resize((600, 400), Image.LANCZOS)
-                            photo = ImageTk.PhotoImage(img)
-                            
-                            # Display in the training figure
-                            self.training_fig.clear()
-                            ax = self.training_fig.add_subplot(111)
-                            ax.imshow(np.asarray(img))
-                            ax.axis('off')
-                            self.training_canvas.draw()
-                    except Exception as img_e:
-                        print(f"Could not display training plot: {img_e}")
-                    
-                    messagebox.showinfo("Success", "Training completed successfully!")
-                    
-                finally:
-                    # Restore original print function
-                    builtins.print = original_print
-                    
-            except Exception as e:
-                self.queue.put(("status", f"Error: {e}"))
-                self.queue.put(("training_stats", f"Error: {e}"))
-                messagebox.showerror("Error", f"An error occurred: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        # Start thread
-        train_thread = threading.Thread(target=train_thread)
-        train_thread.daemon = True
-        train_thread.start()
+        # Create a button to generate the environmental i
