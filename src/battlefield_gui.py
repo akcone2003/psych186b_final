@@ -1003,4 +1003,295 @@ class BattlefieldGUI(tk.Tk):
                                     values=list(WEATHER_CONDITIONS.keys()), state="readonly")
         weather_combo.grid(row=4, column=1, columnspan=2, padx=5, pady=5, sticky='w')
         
-        # Create a button to generate the environmental i
+        # Create a button to generate the environmental impact visualization
+        ttk.Button(controls_frame, text="Analyze Environment Impact", 
+                  command=self.show_environment_impact).grid(row=5, column=0, columnspan=3, padx=5, pady=10)
+
+        # Placeholder for visualization
+        self.viz_fig = plt.Figure(figsize=(6, 6), dpi=100)
+        self.viz_canvas = FigureCanvasTkAgg(self.viz_fig, self.visualization_tab)
+        self.viz_canvas.get_tk_widget().grid(row=1, column=1, rowspan=3, padx=5, pady=5, sticky='nsew')
+        
+        # Make the visualization column expandable
+        self.visualization_tab.columnconfigure(1, weight=1)
+        self.visualization_tab.rowconfigure(1, weight=1)
+    
+    def update_viz_controls(self, event=None):
+        """Update visualization controls based on selected type"""
+        # Not needed anymore - we've restructured the visualization tab
+        pass
+    
+    def browse_file(self, var):
+        """Open file browser and update the variable"""
+        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if filename:
+            var.set(filename)
+    
+    def run_simulation(self):
+        """Run battle simulation with enhanced parameters"""
+        # Check if directories exist
+        os.makedirs('data', exist_ok=True)
+        
+        # Get parameters
+        num_battles = self.num_battles_var.get()
+        max_steps = self.max_steps_var.get()
+        max_enemies = self.max_enemies_var.get() if hasattr(self, 'max_enemies_var') else 3
+        render_final = self.render_var.get() if hasattr(self, 'render_var') else True
+        
+        # Clear log
+        self.simulation_log.config(state=tk.NORMAL)
+        self.simulation_log.delete(1.0, tk.END)
+        self.simulation_log.config(state=tk.DISABLED)
+        
+        # Create a custom print function that writes to our log
+        def custom_print(*args, **kwargs):
+            message = " ".join(map(str, args))
+            self.queue.put(("log", message))
+        
+        # Start simulation in a separate thread
+        def run_sim_thread():
+            try:
+                # Redirect standard output to our custom print function
+                import builtins
+                original_print = builtins.print
+                builtins.print = custom_print
+                
+                # Set up progress updates
+                def progress_callback(battle, total):
+                    progress = (battle / total) * 100
+                    self.queue.put(("progress", progress))
+                
+                # Create a folder for battle images
+                os.makedirs('visualizations/battles', exist_ok=True)
+                
+                # Run simulation - use the enhanced battlefield but don't render during simulation
+                self.queue.put(("status", f"Running enhanced simulation with {num_battles} battles..."))
+                
+                try:
+                    from battlefield_env import run_simulation
+                except ImportError:
+                    from src.battlefield_env import run_simulation
+                    
+                # Don't render during simulation to avoid threading issues
+                results = run_simulation(
+                    num_battles=num_battles, 
+                    max_steps=max_steps, 
+                    render_final=False,  # Important: don't render in thread
+                    max_enemies=max_enemies
+                )
+                
+                self.queue.put(("status", "Simulation complete!"))
+                self.queue.put(("progress", 100))
+                
+                # Report battle results
+                self.queue.put(("log", f"\nSimulation results:"))
+                if isinstance(results, dict):
+                    for outcome, count in results.items():
+                        percentage = (count / num_battles) * 100
+                        self.queue.put(("log", f"{outcome.capitalize()}: {count} ({percentage:.1f}%)"))
+                
+                messagebox.showinfo("Success", f"Simulation completed with {num_battles} battles")
+                
+                # Restore standard output
+                builtins.print = original_print
+                
+            except Exception as e:
+                self.queue.put(("status", f"Error: {e}"))
+                self.queue.put(("log", f"ERROR: {e}"))
+                messagebox.showerror("Error", f"An error occurred: {e}")
+        
+        # Start thread
+        sim_thread = threading.Thread(target=run_sim_thread)
+        sim_thread.daemon = True
+        sim_thread.start()
+    
+    def run_interactive_battle(self):
+        """Run an interactive battle with the current battlefield parameters"""
+        try:
+            # Initialize battlefield environment
+            env = BattlefieldEnv()
+            self.battlefield_env = env
+            
+            # Set custom positions if needed
+            # This would need to modify the battlefield environment directly
+            
+            # Just render the battlefield for now
+            env.render()
+            
+            # Store for future reference
+            self.battlefield_env = env
+            
+            # Add the battlefield view to the results
+            self.advisor_results.delete(1.0, tk.END)
+            self.advisor_results.insert(tk.END, "Interactive battle initialized!\n\n")
+            self.advisor_results.insert(tk.END, f"Terrain: {env.current_terrain}\n")
+            self.advisor_results.insert(tk.END, f"Weather: {env.current_weather}\n\n")
+            self.advisor_results.insert(tk.END, f"Friendly Units: {len(env.friendly_units)}\n")
+            self.advisor_results.insert(tk.END, f"Enemy Units: {len(env.enemies)}\n")
+            
+            # Display unit types
+            self.advisor_results.insert(tk.END, "\nFriendly Unit Types:\n")
+            for i, unit in enumerate(env.friendly_units):
+                self.advisor_results.insert(tk.END, f"Unit {i+1}: {unit.unit_type.name}\n")
+            
+            self.advisor_results.insert(tk.END, "\nEnemy Unit Types:\n")
+            for i, enemy in enumerate(env.enemies):
+                self.advisor_results.insert(tk.END, f"Enemy {i+1}: {enemy.unit_type.name}\n")
+                
+        except Exception as e:
+            self.status_var.set(f"Error running interactive battle: {e}")
+            messagebox.showerror("Error", f"Could not initialize battlefield: {e}")
+    
+    def show_environment_impact(self):
+        """Show the impact of different terrain and weather on battle outcomes"""
+        # Create a new window for the visualization
+        impact_window = tk.Toplevel(self)
+        impact_window.title("Environment Impact Analysis")
+        impact_window.geometry("800x600")
+        
+        # Create figure
+        fig = plt.Figure(figsize=(10, 8))
+        
+        # Create subplots for terrain and weather
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+        
+        # Example data (in a real implementation, this would come from analysis of battle data)
+        terrain_types = list(TERRAIN_TYPES.keys())
+        terrain_win_rates = [0.65, 0.45, 0.55, 0.60, 0.50]  # Example win rates for different terrains
+        
+        weather_types = list(WEATHER_CONDITIONS.keys())
+        weather_win_rates = [0.60, 0.45, 0.50, 0.40, 0.55]  # Example win rates for different weather
+        
+        # Plot terrain impact
+        terrain_bars = ax1.bar(terrain_types, terrain_win_rates, color='green', alpha=0.7)
+        ax1.set_ylim(0, 1.0)
+        ax1.set_ylabel("Win Rate")
+        ax1.set_title("Impact of Terrain on Battle Outcomes")
+        ax1.grid(axis='y', linestyle='--', alpha=0.3)
+        
+        # Add value labels
+        for bar, rate in zip(terrain_bars, terrain_win_rates):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f"{rate:.0%}", ha='center', va='bottom')
+        
+        # Plot weather impact
+        weather_bars = ax2.bar(weather_types, weather_win_rates, color='blue', alpha=0.7)
+        ax2.set_ylim(0, 1.0)
+        ax2.set_ylabel("Win Rate")
+        ax2.set_title("Impact of Weather on Battle Outcomes")
+        ax2.grid(axis='y', linestyle='--', alpha=0.3)
+        
+        # Add value labels
+        for bar, rate in zip(weather_bars, weather_win_rates):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f"{rate:.0%}", ha='center', va='bottom')
+        
+        # Set layout
+        fig.tight_layout()
+        
+        # Embed in window
+        canvas = FigureCanvasTkAgg(fig, master=impact_window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    
+    def train_model(self):
+        """Trigger the model training from lstm_model.py"""
+        # Check if data file exists
+        data_file = self.data_file_var.get()
+        if not os.path.exists(data_file):
+            messagebox.showerror("Error", f"Data file {data_file} not found. Please run simulation first.")
+            return
+        
+        # Get parameters
+        model_path = self.model_path_var.get()
+        
+        # Ensure directories exist
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        os.makedirs('visualizations', exist_ok=True)
+        
+        # Clear previous text and plot
+        self.training_stats_text.delete(1.0, tk.END)
+        self.training_fig.clear()
+        
+        # Start training in a separate thread
+        def train_thread():
+            try:
+                self.queue.put(("status", "Starting model training..."))
+                self.queue.put(("progress", 10))
+                
+                # Create a custom print function that updates the GUI
+                def custom_print(*args, **kwargs):
+                    message = " ".join(map(str, args))
+                    # Use queue for thread safety
+                    self.queue.put(("training_stats", message))
+                
+                # Temporarily redirect stdout for training functions
+                import builtins
+                original_print = builtins.print
+                builtins.print = custom_print
+                
+                try:
+                    # Define our wrapper function for progress updates
+                    def progress_callback(epoch, epochs, train_loss, test_loss, accuracy):
+                        progress = int((epoch / epochs) * 100)
+                        self.queue.put(("progress", progress))
+                        message = f"Epoch {epoch}/{epochs} | Train Loss: {train_loss:.4f} | Test Loss: {test_loss:.4f} | Accuracy: {accuracy:.2f}%"
+                        self.queue.put(("training_stats", message))
+                    
+                    # Import training module
+                    try:
+                        from lstm_model import load_and_preprocess_data, train_lstm_model, LSTMBattlePredictor
+                    except ImportError:
+                        from src.lstm_model import load_and_preprocess_data, train_lstm_model, LSTMBattlePredictor
+                    
+                    # Load and preprocess data
+                    self.queue.put(("training_stats", f"Loading data from {data_file}..."))
+                    train_loader, test_loader, input_size, _ = load_and_preprocess_data(data_file)
+                    
+                    # Train model
+                    self.queue.put(("training_stats", "Starting model training..."))
+                    model = train_lstm_model(train_loader, test_loader, input_size)
+                    
+                    # After training completes, load the trained model
+                    self.model = model
+                    
+                    # Update final status
+                    self.queue.put(("status", "Training complete! Model loaded successfully."))
+                    self.queue.put(("progress", 100))
+                    self.queue.put(("training_stats", "Training complete! Model saved as 'best_battle_predictor.pt'"))
+                    
+                    # Update the training plot if possible
+                    try:
+                        if os.path.exists("visualizations/battle_predictor_training.png"):
+                            from PIL import Image, ImageTk
+                            img = Image.open("visualizations/battle_predictor_training.png")
+                            img = img.resize((600, 400), Image.LANCZOS)
+                            photo = ImageTk.PhotoImage(img)
+                            
+                            # Display in the training figure
+                            self.training_fig.clear()
+                            ax = self.training_fig.add_subplot(111)
+                            ax.imshow(np.asarray(img))
+                            ax.axis('off')
+                            self.training_canvas.draw()
+                    except Exception as img_e:
+                        print(f"Could not display training plot: {img_e}")
+                    
+                    messagebox.showinfo("Success", "Training completed successfully!")
+                    
+                finally:
+                    # Restore original print function
+                    builtins.print = original_print
+                    
+            except Exception as e:
+                self.queue.put(("status", f"Error: {e}"))
+                self.queue.put(("training_stats", f"Error: {e}"))
+                messagebox.showerror("Error", f"An error occurred: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Start thread
+        train_thread = threading.Thread(target=train_thread)
+        train_thread.daemon = True
+        train_thread.start()
