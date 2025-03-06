@@ -129,11 +129,31 @@ class BattlefieldGUI(tk.Tk):
             num_battles = self.self_play_battles_var.get()
             max_steps = self.self_play_steps_var.get()
             save_viz = self.self_play_save_viz_var.get()
+            max_enemies = self.self_play_max_enemies_var.get()
+            
+            # Get terrain type (handle "Random")
+            terrain = self.self_play_terrain_var.get()
+            if terrain == "Random":
+                terrain = None
+                
+            # Get weather type (handle "Random")
+            weather = self.self_play_weather_var.get()
+            if weather == "Random":
+                weather = None
+                
+            enable_artillery = self.self_play_artillery_var.get()
+            enable_stealth = self.self_play_stealth_var.get()
+            
         except:
             # If variables not defined yet, use defaults
             num_battles = 1
             max_steps = 50
             save_viz = True
+            max_enemies = 3
+            terrain = None
+            weather = None
+            enable_artillery = False
+            enable_stealth = False
         
         # Update status
         self.status_var.set("Starting self-play simulation...")
@@ -142,11 +162,16 @@ class BattlefieldGUI(tk.Tk):
         # Function to run in a separate thread
         def run_simulation():
             try:
-                # Create simulator
+                # Create simulator with all parameters
                 simulator = SelfPlaySimulation(
                     model_path="models/best_battle_predictor.pt",
                     max_steps=max_steps,
-                    save_visualizations=save_viz
+                    save_visualizations=save_viz,
+                    max_enemies=max_enemies,
+                    terrain_type=terrain,
+                    weather_type=weather,
+                    enable_artillery=enable_artillery,
+                    enable_stealth=enable_stealth
                 )
                 
                 # Queue update
@@ -162,6 +187,20 @@ class BattlefieldGUI(tk.Tk):
                     result_text += f"Outcome: {result['result']}\n"
                     result_text += f"Blue Units Remaining: {result['blue_remaining']}/{result['blue_total']}\n"
                     result_text += f"Red Units Remaining: {result['red_remaining']}/{result['red_total']}\n"
+                    
+                    # Add terrain and weather info
+                    if hasattr(simulator.env, 'current_terrain'):
+                        result_text += f"\nTerrain: {simulator.env.current_terrain}\n"
+                    if hasattr(simulator.env, 'current_weather'):
+                        result_text += f"Weather: {simulator.env.current_weather}\n"
+                    
+                    # Add unit type info if available
+                    if hasattr(simulator.env, 'friendly_units') and hasattr(simulator.env, 'enemies'):
+                        blue_types = [unit.unit_type.name for unit in simulator.env.friendly_units]
+                        red_types = [enemy.unit_type.name for enemy in simulator.env.enemies]
+                        
+                        result_text += f"\nBlue Unit Types: {', '.join(blue_types)}\n"
+                        result_text += f"Red Unit Types: {', '.join(red_types)}\n"
                     
                     # Queue results for display
                     self.queue.put(("self_play_result", result_text))
@@ -189,6 +228,14 @@ class BattlefieldGUI(tk.Tk):
                     result_text += f"Average Blue Units Remaining: {avg_blue_remaining:.2f}\n"
                     result_text += f"Average Red Units Remaining: {avg_red_remaining:.2f}\n\n"
                     
+                    # Add custom parameters info
+                    result_text += f"Custom Parameters:\n"
+                    result_text += f"- Max Enemies: {max_enemies}\n"
+                    result_text += f"- Terrain: {terrain if terrain else 'Random'}\n"
+                    result_text += f"- Weather: {weather if weather else 'Random'}\n"
+                    result_text += f"- Artillery Units: {'Enabled' if enable_artillery else 'Disabled'}\n"
+                    result_text += f"- Stealth Units: {'Enabled' if enable_stealth else 'Disabled'}\n\n"
+                    
                     if save_viz:
                         result_text += "Visualizations saved to 'visualizations/self_play/'"
                     
@@ -211,46 +258,76 @@ class BattlefieldGUI(tk.Tk):
         thread.daemon = True
         thread.start()
 
-    # Add this new method to the BattlefieldGUI class to create the self-play tab:
     def _setup_self_play_tab(self):
-        """Set up the self-play tab"""
+        """Set up the self-play tab with enhanced customization options"""
         # Header
         header = ttk.Label(self.self_play_tab, text="Model Self-Play", style="Header.TLabel")
         header.grid(row=0, column=0, columnspan=2, pady=10, sticky='w')
         
-        # Frame for parameters
-        params_frame = ttk.LabelFrame(self.self_play_tab, text="Self-Play Parameters")
-        params_frame.grid(row=1, column=0, padx=10, pady=10, sticky='nw')
+        # Create a notebook for the parameters (tabbed interface for better organization)
+        params_notebook = ttk.Notebook(self.self_play_tab)
+        params_notebook.grid(row=1, column=0, padx=10, pady=10, sticky='nw')
         
+        # Create tabs for different parameter categories
+        basic_tab = ttk.Frame(params_notebook)
+        advanced_tab = ttk.Frame(params_notebook)
+        
+        params_notebook.add(basic_tab, text="Basic Settings")
+        params_notebook.add(advanced_tab, text="Battlefield Settings")
+        
+        # ----- BASIC SETTINGS TAB -----
         # Number of battles
-        ttk.Label(params_frame, text="Number of Battles:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(basic_tab, text="Number of Battles:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         self.self_play_battles_var = tk.IntVar(value=1)
-        ttk.Spinbox(params_frame, from_=1, to=50, textvariable=self.self_play_battles_var, width=5).grid(row=0, column=1, padx=5, pady=5, sticky='w')
+        ttk.Spinbox(basic_tab, from_=1, to=50, textvariable=self.self_play_battles_var, width=5).grid(row=0, column=1, padx=5, pady=5, sticky='w')
         
         # Max steps per battle
-        ttk.Label(params_frame, text="Max Steps per Battle:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(basic_tab, text="Max Steps per Battle:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
         self.self_play_steps_var = tk.IntVar(value=50)
-        ttk.Spinbox(params_frame, from_=10, to=200, textvariable=self.self_play_steps_var, width=5).grid(row=1, column=1, padx=5, pady=5, sticky='w')
+        ttk.Spinbox(basic_tab, from_=10, to=200, textvariable=self.self_play_steps_var, width=5).grid(row=1, column=1, padx=5, pady=5, sticky='w')
         
         # Save visualizations checkbox
         self.self_play_save_viz_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(params_frame, text="Save Battle Visualizations", variable=self.self_play_save_viz_var).grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky='w')
+        ttk.Checkbutton(basic_tab, text="Save Final Battle State", variable=self.self_play_save_viz_var).grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky='w')
         
-        # Battle descriptions
-        desc_frame = ttk.LabelFrame(params_frame, text="Battle Types")
-        desc_frame.grid(row=3, column=0, columnspan=2, padx=5, pady=5, sticky='we')
+        # ----- ADVANCED SETTINGS TAB -----
+        # Max enemies
+        ttk.Label(advanced_tab, text="Maximum Enemies:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        self.self_play_max_enemies_var = tk.IntVar(value=3)
+        ttk.Spinbox(advanced_tab, from_=1, to=5, textvariable=self.self_play_max_enemies_var, width=5).grid(row=0, column=1, padx=5, pady=5, sticky='w')
         
-        # Single battle description
-        ttk.Label(desc_frame, text="Single Battle:").grid(row=0, column=0, padx=5, pady=2, sticky='w')
-        ttk.Label(desc_frame, text="Detailed step-by-step simulation with full logging", wraplength=300).grid(row=0, column=1, padx=5, pady=2, sticky='w')
+        # Terrain type
+        ttk.Label(advanced_tab, text="Terrain Type:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        self.self_play_terrain_var = tk.StringVar(value="Random")
+        terrain_choices = ["Random"] + list(TERRAIN_TYPES.keys())
+        ttk.Combobox(advanced_tab, textvariable=self.self_play_terrain_var, values=terrain_choices, 
+                state="readonly", width=15).grid(row=1, column=1, padx=5, pady=5, sticky='w')
         
-        # Campaign description
-        ttk.Label(desc_frame, text="Campaign:").grid(row=1, column=0, padx=5, pady=2, sticky='w')
-        ttk.Label(desc_frame, text="Multiple battles with statistical summary at the end", wraplength=300).grid(row=1, column=1, padx=5, pady=2, sticky='w')
+        # Weather type
+        ttk.Label(advanced_tab, text="Weather:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        self.self_play_weather_var = tk.StringVar(value="Random")
+        weather_choices = ["Random"] + list(WEATHER_CONDITIONS.keys())
+        ttk.Combobox(advanced_tab, textvariable=self.self_play_weather_var, values=weather_choices, 
+                state="readonly", width=15).grid(row=2, column=1, padx=5, pady=5, sticky='w')
+        
+        # Unit type options
+        ttk.Label(advanced_tab, text="Special Unit Types:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        
+        # Enable artillery checkbox
+        self.self_play_artillery_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(advanced_tab, text="Enable Artillery Units", variable=self.self_play_artillery_var).grid(row=4, column=0, columnspan=2, padx=20, pady=2, sticky='w')
+        
+        # Enable stealth checkbox
+        self.self_play_stealth_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(advanced_tab, text="Enable Stealth Units", variable=self.self_play_stealth_var).grid(row=5, column=0, columnspan=2, padx=20, pady=2, sticky='w')
+        
+        # Frame for action buttons (below the notebook)
+        actions_frame = ttk.Frame(self.self_play_tab)
+        actions_frame.grid(row=2, column=0, padx=10, pady=10, sticky='nw')
         
         # Run buttons
-        ttk.Button(params_frame, text="Run Single Battle", command=lambda: self.run_self_play()).grid(row=4, column=0, padx=5, pady=10, sticky='w')
-        ttk.Button(params_frame, text="Run Campaign", command=lambda: self._set_multiple_battles_and_run()).grid(row=4, column=1, padx=5, pady=10, sticky='w')
+        ttk.Button(actions_frame, text="Run Single Battle", command=lambda: self.run_self_play()).grid(row=0, column=0, padx=5, pady=10, sticky='w')
+        ttk.Button(actions_frame, text="Run Campaign", command=lambda: self._set_multiple_battles_and_run()).grid(row=0, column=1, padx=5, pady=10, sticky='w')
         
         # Results frame
         results_frame = ttk.LabelFrame(self.self_play_tab, text="Self-Play Results")
@@ -281,11 +358,23 @@ class BattlefieldGUI(tk.Tk):
     • A single detailed battle with step-by-step logging
     • A multi-battle campaign with statistical summary
 
-    To begin, make sure you have a trained model, then select your parameters and click one of the run buttons.
+    To begin, make sure you have a trained model, then configure your parameters:
 
-    Battle visualizations will be saved to the 'visualizations/self_play' directory.
+    Basic Settings:
+    - Number of battles to run
+    - Maximum steps per battle
+    - Whether to save visualizations
+
+    Battlefield Settings:
+    - Number of enemies (1-5)
+    - Terrain type (affects movement and combat)
+    - Weather conditions (affects visibility and accuracy)
+    - Special unit types (artillery, stealth)
+
+    Once configured, click one of the run buttons.
     """
         self.self_play_results.insert(tk.END, welcome_text)
+
 
 
     def _set_multiple_battles_and_run(self):

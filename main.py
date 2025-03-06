@@ -5,7 +5,7 @@ This script provides multiple interfaces for running the battlefield simulation:
 1. Command-line interface for running simulations, training models, and using the battle advisor
 2. GUI mode for interactive use (default)
 3. Full pipeline mode that runs all steps in sequence
-4. Self-play mode for model vs. model simulation
+4. Self-play mode for model vs. model simulation with customizable parameters
 
 When run directly without arguments, it will launch the GUI by default.
 """
@@ -66,6 +66,20 @@ def main():
     selfplay_parser.add_argument('--steps', type=int, default=50,
                                help='Maximum steps per battle')
     
+    # Add customization parameters
+    selfplay_parser.add_argument('--max-enemies', type=int, default=3,
+                               help='Maximum number of enemies (1-5)')
+    selfplay_parser.add_argument('--terrain', type=str, 
+                               choices=['Plains', 'Mountains', 'Forest', 'Urban', 'Desert'],
+                               help='Specific terrain type to use')
+    selfplay_parser.add_argument('--weather', type=str, 
+                               choices=['Clear', 'Foggy', 'Rainy', 'Stormy', 'Snowy'],
+                               help='Specific weather condition to use')
+    selfplay_parser.add_argument('--enable-artillery', action='store_true',
+                               help='Enable artillery units')
+    selfplay_parser.add_argument('--enable-stealth', action='store_true',
+                               help='Enable stealth units')
+    
     # GUI parser
     gui_parser = subparsers.add_parser('gui', help='Launch the GUI interface')
     
@@ -111,7 +125,15 @@ def main():
             return
             
         print(f"Starting self-play simulation with model {args.model}")
-        run_self_play_demo(model_path=args.model, num_battles=args.battles)
+        run_self_play_demo(
+            model_path=args.model, 
+            num_battles=args.battles,
+            max_enemies=args.max_enemies,
+            terrain_type=args.terrain,
+            weather_type=args.weather,
+            enable_artillery=args.enable_artillery,
+            enable_stealth=args.enable_stealth
+        )
     
     elif args.command == 'gui':
         launch_gui()

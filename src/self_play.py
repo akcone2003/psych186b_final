@@ -15,12 +15,12 @@ from matplotlib.figure import Figure
 # Try importing from both module styles to be flexible
 try:
     # Direct imports
-    from battlefield_env import BattlefieldEnv, UnitType, ActionType
+    from battlefield_env import BattlefieldEnv, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS, Enemy
     from lstm_model import load_model, predict_battle_outcome
     from battle_strategy import get_optimal_actions, get_optimal_positioning
 except ImportError:
     # Fallback to src directory structure
-    from src.battlefield_env import BattlefieldEnv, UnitType, ActionType
+    from src.battlefield_env import BattlefieldEnv, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS, Enemy
     from src.lstm_model import load_model, predict_battle_outcome
     from src.battle_strategy import get_optimal_actions, get_optimal_positioning
 
@@ -30,7 +30,9 @@ class SelfPlaySimulation:
     Self-play simulation where the model controls both sides of the battlefield
     """
     def __init__(self, model_path='models/best_battle_predictor.pt', max_steps=50, 
-                 save_visualizations=True, visualization_dir='visualizations/self_play'):
+                 save_visualizations=True, visualization_dir='visualizations/self_play',
+                 max_enemies=3, terrain_type=None, weather_type=None, 
+                 enable_artillery=False, enable_stealth=False):
         """
         Initialize the self-play simulation
         
@@ -39,10 +41,20 @@ class SelfPlaySimulation:
             max_steps: Maximum steps per battle
             save_visualizations: Whether to save battle visualizations
             visualization_dir: Directory to save visualizations
+            max_enemies: Maximum number of enemies per battle (1-5)
+            terrain_type: Specific terrain type to use (None for random)
+            weather_type: Specific weather type to use (None for random)
+            enable_artillery: Whether to enable artillery units
+            enable_stealth: Whether to enable stealth units
         """
         self.max_steps = max_steps
         self.save_visualizations = save_visualizations
         self.visualization_dir = visualization_dir
+        self.max_enemies = min(max(1, max_enemies), 5)  # Clamp between 1-5
+        self.terrain_type = terrain_type
+        self.weather_type = weather_type
+        self.enable_artillery = enable_artillery
+        self.enable_stealth = enable_stealth
         
         # Create visualization directory if it doesn't exist
         if save_visualizations:
@@ -80,8 +92,8 @@ class SelfPlaySimulation:
         Returns:
             result: Dictionary with battle outcome information
         """
-        # Initialize environment
-        self.env = BattlefieldEnv(max_steps=self.max_steps)
+        # Initialize environment with custom parameters
+        self.env = self._create_custom_environment()
         obs = self.env.reset()
         
         if log_steps:
@@ -90,9 +102,12 @@ class SelfPlaySimulation:
             print(f"{'='*50}")
             
             # Initial state
+            blue_units = [unit.unit_type.name for unit in self.env.friendly_units]
+            red_units = [enemy.unit_type.name for enemy in self.env.enemies]
+            
             print("Initial setup:")
-            print(f"Blue forces: {len(self.env.friendly_units)} units")
-            print(f"Red forces: {len(self.env.enemies)} units")
+            print(f"Blue forces: {len(self.env.friendly_units)} units ({', '.join(blue_units)})")
+            print(f"Red forces: {len(self.env.enemies)} units ({', '.join(red_units)})")
             
         # Battle loop
         done = False
@@ -142,7 +157,7 @@ class SelfPlaySimulation:
         # Only render the final battle state if requested
         if render_battle:
             self._render_and_save(step, is_final=True)
-        
+            
         # Get battle result
         result = self._get_battle_result()
         
@@ -158,6 +173,132 @@ class SelfPlaySimulation:
         self._update_stats(result, step)
         
         return result
+        
+        
+    def _create_custom_environment(self):
+        """
+        Create a battlefield environment with custom parameters
+        
+        Returns:
+            env: Customized BattlefieldEnv instance
+        """
+        # Create base environment
+        env = BattlefieldEnv(max_steps=self.max_steps, max_enemies=self.max_enemies)
+        
+        # Set custom terrain if specified
+        if self.terrain_type is not None and self.terrain_type in TERRAIN_TYPES:
+            # We need to override the terrain generation
+            # This is a bit hacky, but we're working with what we have
+            if hasattr(env, 'current_terrain'):
+                env.current_terrain = self.terrain_type
+                
+            # Try to update terrain data if possible
+            if hasattr(env, 'terrain_data'):
+                # Set all cells to this terrain type
+                for x in range(env.grid_size):
+                    for y in range(env.grid_size):
+                        env.terrain_data[x][y] = TERRAIN_TYPES[self.terrain_type]
+                        
+        # Set custom weather if specified
+        if self.weather_type is not None and self.weather_type in WEATHER_CONDITIONS:
+            if hasattr(env, 'current_weather'):
+                env.current_weather = self.weather_type
+                
+        # Handle unit type customization
+        # We need to reset the environment to apply these changes
+        env.reset()
+        
+        # Customize enemy types if needed
+        if self.enable_artillery or self.enable_stealth:
+            # Remove existing enemies
+            original_enemy_count = len(env.enemies)
+            env.enemies = []
+            
+            # Regenerate enemies with custom types
+            for i in range(original_enemy_count):
+                # Choose a type with emphasis on enabling the requested types
+                available_types = [UnitType.INFANTRY, UnitType.ARMORED, UnitType.AERIAL]
+                
+                if self.enable_artillery:
+                    available_types.append(UnitType.ARTILLERY)
+                    # Add it twice to increase probability
+                    available_types.append(UnitType.ARTILLERY)
+                    
+                if self.enable_stealth:
+                    available_types.append(UnitType.STEALTH)
+                    # Add it twice to increase probability
+                    available_types.append(UnitType.STEALTH)
+                    
+                # Random position that doesn't conflict with existing units
+                positions = env._generate_non_overlapping_positions(1, 
+                    exclude_positions=[tuple(unit.position) for unit in env.friendly_units] + 
+                                     [tuple(enemy.position) for enemy in env.enemies])
+                
+                # Select random type from available types
+                unit_type = random.choice(available_types)
+                
+                # Create enemy with appropriate stats based on type
+                aggression = random.uniform(0.6, 0.95)
+                
+                if unit_type == UnitType.INFANTRY:
+                    enemy = Enemy(
+                        unit_type=unit_type,
+                        position=positions[0],
+                        hp=100,
+                        attack_power=12,
+                        speed=2,
+                        detection_range=2,
+                        stealth_level=0,
+                        ai_aggression=aggression
+                    )
+                elif unit_type == UnitType.ARMORED:
+                    enemy = Enemy(
+                        unit_type=unit_type,
+                        position=positions[0],
+                        hp=200, 
+                        attack_power=35,
+                        speed=1,
+                        detection_range=2,
+                        stealth_level=0,
+                        ai_aggression=aggression
+                    )
+                elif unit_type == UnitType.AERIAL:
+                    enemy = Enemy(
+                        unit_type=unit_type,
+                        position=positions[0],
+                        hp=60,
+                        attack_power=15,
+                        speed=3,
+                        detection_range=3,
+                        stealth_level=1,
+                        ai_aggression=aggression
+                    )
+                elif unit_type == UnitType.ARTILLERY:
+                    enemy = Enemy(
+                        unit_type=unit_type,
+                        position=positions[0],
+                        hp=70,
+                        attack_power=40,
+                        speed=1,
+                        detection_range=4,
+                        stealth_level=0,
+                        ai_aggression=aggression * 0.8  # Artillery is more defensive
+                    )
+                elif unit_type == UnitType.STEALTH:
+                    enemy = Enemy(
+                        unit_type=unit_type,
+                        position=positions[0],
+                        hp=60,
+                        attack_power=20,
+                        speed=2,
+                        detection_range=3,
+                        stealth_level=3,
+                        ai_aggression=aggression
+                    )
+                    
+                env.enemies.append(enemy)
+            
+        return env
     
     def run_multiple_battles(self, num_battles=10, log_individual=False):
         """
@@ -439,26 +580,47 @@ class SelfPlaySimulation:
     
     def _update_stats(self, result, steps):
         """
-        Update battle statistics
+        Update battle statistics with improved survival rate tracking
         
         Parameters:
             result: Battle result dictionary
             steps: Number of steps the battle took
         """
-        # Update wins/losses
         if result['result'] == 'blue_victory' or result['result'] == 'blue_advantage':
             self.battle_stats['wins_blue'] += 1
         elif result['result'] == 'red_victory' or result['result'] == 'red_advantage':
             self.battle_stats['wins_red'] += 1
         elif result['result'] == 'draw':
             self.battle_stats['draws'] += 1
+        else:  # Handle 'ongoing' outcomes by classifying based on relative strength
+            # If we reach max steps, force a classification based on unit count/health
+            blue_remaining = result['blue_remaining'] / result['blue_total']
+            red_remaining = result['red_remaining'] / result['red_total']
+            
+            if blue_remaining > red_remaining * 1.1:
+                self.battle_stats['wins_blue'] += 1
+            elif red_remaining > blue_remaining * 1.1:
+                self.battle_stats['wins_red'] += 1
+            else:
+                self.battle_stats['draws'] += 1
         
         # Update steps
         self.battle_stats['avg_steps'].append([steps])
         
-        # Update units remaining
-        self.battle_stats['blue_units_remaining'].append(result['blue_remaining'] / result['blue_total'])
-        self.battle_stats['red_units_remaining'].append(result['red_remaining'] / result['red_total'])
+        # Update units remaining - calculate survival rates for both sides in ALL battles
+        blue_survival_rate = result['blue_remaining'] / result['blue_total']
+        red_survival_rate = result['red_remaining'] / result['red_total']
+        
+        # If Blue won, then Red's survival rate should be 0 (all Red units were eliminated)
+        # If Red won, then Blue's survival rate should be 0 (all Blue units were eliminated)
+        if result['result'] == 'blue_victory':
+            red_survival_rate = 0.0  # All Red units were eliminated
+        elif result['result'] == 'red_victory':
+            blue_survival_rate = 0.0  # All Blue units were eliminated
+        
+        # Now track the survival rates that reflect the actual battle outcome
+        self.battle_stats['blue_units_remaining'].append(blue_survival_rate)
+        self.battle_stats['red_units_remaining'].append(red_survival_rate)
     
     def _render_and_save(self, step, is_final=False):
         """
@@ -554,18 +716,32 @@ class SelfPlaySimulation:
             print(f"Error creating statistics visualization: {e}")
 
 
-def run_self_play_demo(model_path='models/best_battle_predictor.pt', num_battles=1):
+def run_self_play_demo(model_path='models/best_battle_predictor.pt', num_battles=1, 
+                 max_enemies=3, terrain_type=None, weather_type=None,
+                 enable_artillery=False, enable_stealth=False):
     """
     Run a self-play demonstration
     
     Parameters:
         model_path: Path to the trained model
         num_battles: Number of battles to run
+        max_enemies: Maximum number of enemies per battle
+        terrain_type: Specific terrain type to use (None for random)
+        weather_type: Specific weather type to use (None for random)
+        enable_artillery: Whether to enable artillery units
+        enable_stealth: Whether to enable stealth units
     """
-    # Create the self-play simulator
-    simulator = SelfPlaySimulation(model_path=model_path, 
-                                 max_steps=50,
-                                 save_visualizations=True)
+    # Create the self-play simulator with custom parameters
+    simulator = SelfPlaySimulation(
+        model_path=model_path, 
+        max_steps=50,
+        save_visualizations=True,
+        max_enemies=max_enemies,
+        terrain_type=terrain_type,
+        weather_type=weather_type,
+        enable_artillery=enable_artillery,
+        enable_stealth=enable_stealth
+    )
     
     # Run the specified number of battles
     if num_battles == 1:
