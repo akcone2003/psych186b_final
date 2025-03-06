@@ -212,6 +212,94 @@ def load_and_preprocess_data(filepath, test_size=0.2, random_state=42):
         raise
 
 
+def calculate_metrics(model, test_loader):
+    """
+    Calculate various performance metrics for model evaluation
+    
+    Parameters:
+        model: Trained LSTM model
+        test_loader: DataLoader with test data
+        
+    Returns:
+        metrics_dict: Dictionary with various performance metrics
+    """
+    # Import necessary libraries
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+    from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve
+    import numpy as np
+    
+    model.eval()
+    all_predictions = []
+    all_targets = []
+    all_raw_predictions = []
+    
+    with torch.no_grad():
+        for batch_x, batch_y in test_loader:
+            # Add time dimension for LSTM if needed
+            if len(batch_x.shape) == 2:
+                batch_x = batch_x.unsqueeze(1)
+                
+            # Forward pass
+            outputs = model(batch_x)
+            
+            # Convert outputs to binary predictions
+            predictions = (outputs > 0.5).float()
+            
+            # Collect actual predictions and targets
+            all_predictions.extend(predictions.cpu().numpy().flatten())
+            all_targets.extend(batch_y.cpu().numpy().flatten())
+            all_raw_predictions.extend(outputs.cpu().numpy().flatten())
+    
+    # Calculate metrics
+    metrics = {}
+    
+    # Basic metrics
+    metrics['accuracy'] = accuracy_score(all_targets, all_predictions)
+    
+    # Handle cases with potentially only one class
+    try:
+        metrics['precision'] = precision_score(all_targets, all_predictions)
+    except:
+        metrics['precision'] = np.nan
+        
+    try:
+        metrics['recall'] = recall_score(all_targets, all_predictions)
+    except:
+        metrics['recall'] = np.nan
+        
+    try:
+        metrics['f1'] = f1_score(all_targets, all_predictions)
+    except:
+        metrics['f1'] = np.nan
+    
+    # Calculate confusion matrix
+    metrics['confusion_matrix'] = confusion_matrix(all_targets, all_predictions)
+    
+    # Calculate ROC curve and AUC
+    try:
+        fpr, tpr, _ = roc_curve(all_targets, all_raw_predictions)
+        metrics['roc_auc'] = auc(fpr, tpr)
+        metrics['roc_curve'] = (fpr, tpr)
+    except:
+        metrics['roc_auc'] = np.nan
+        metrics['roc_curve'] = ([], [])
+    
+    # Calculate Precision-Recall curve
+    try:
+        precision, recall, _ = precision_recall_curve(all_targets, all_raw_predictions)
+        metrics['pr_curve'] = (precision, recall)
+        metrics['pr_auc'] = auc(recall, precision)
+    except:
+        metrics['pr_curve'] = ([], [])
+        metrics['pr_auc'] = np.nan
+    
+    # Store raw data for additional analysis
+    metrics['raw_predictions'] = all_raw_predictions
+    metrics['targets'] = all_targets
+    
+    return metrics
+
+
 def train_lstm_model(train_loader, test_loader, input_size, num_epochs=50):
     """Train the LSTM model with early stopping"""
     # Initialize model
@@ -358,16 +446,30 @@ def train_lstm_model(train_loader, test_loader, input_size, num_epochs=50):
     # Load best model
     model.load_state_dict(torch.load('models/best_battle_predictor.pt'))
     
-    # Plot results
-    plot_training_results(train_losses, test_losses, test_accuracies)
+    # Calculate comprehensive test metrics on the test set
+    print("\nCalculating comprehensive test metrics...")
+    test_metrics = calculate_metrics(model, test_loader)
+    
+    # Print key metrics
+    print(f"Test Accuracy: {test_metrics.get('accuracy', 0):.4f}")
+    print(f"Precision: {test_metrics.get('precision', 0):.4f}")
+    print(f"Recall: {test_metrics.get('recall', 0):.4f}")
+    print(f"F1 Score: {test_metrics.get('f1', 0):.4f}")
+    print(f"ROC AUC: {test_metrics.get('roc_auc', 0):.4f}")
+    
+    # Plot results with the additional test metrics
+    plot_training_results(train_losses, test_losses, test_accuracies, test_metrics)
     
     return model
 
 
-def plot_training_results(train_losses, test_losses, test_accuracies):
+def plot_training_results(train_losses, test_losses, test_accuracies, test_metrics=None):
     """Plot training metrics with enhanced visualization and higher resolution"""
     import matplotlib.pyplot as plt
     import numpy as np
+    
+    # Create directory for visualizations if it doesn't exist
+    os.makedirs('visualizations', exist_ok=True)
     
     epochs = range(1, len(train_losses) + 1)
     
@@ -476,6 +578,22 @@ def plot_training_results(train_losses, test_losses, test_accuracies):
         f"  - Final: {final_accuracy:.2f}%\n"
         f"  - Best: {best_accuracy:.2f}%\n"
         f"  - Change: {'+' if accuracy_improvement >= 0 else ''}{accuracy_improvement:.2f}%\n\n"
+    )
+    
+    # Add test metrics to summary if provided
+    if test_metrics is not None:
+        summary_text += (
+            f"TEST PERFORMANCE METRICS\n"
+            f"========================\n\n"
+            f"Test Accuracy: {test_metrics.get('accuracy', 'N/A'):.4f}\n"
+            f"Precision: {test_metrics.get('precision', 'N/A'):.4f}\n"
+            f"Recall: {test_metrics.get('recall', 'N/A'):.4f}\n"
+            f"F1 Score: {test_metrics.get('f1', 'N/A'):.4f}\n"
+            f"ROC AUC: {test_metrics.get('roc_auc', 'N/A'):.4f}\n"
+            f"PR AUC: {test_metrics.get('pr_auc', 'N/A'):.4f}\n\n"
+        )
+    
+    summary_text += (
         f"Model converged: {'Yes' if not np.isnan(final_train_loss) and final_train_loss < 0.1 else 'No'}\n"
         f"Signs of overfitting: {'Yes' if not np.isnan(final_val_loss) and not np.isnan(final_train_loss) and final_val_loss > final_train_loss * 1.2 else 'No'}\n"
     )
@@ -485,6 +603,112 @@ def plot_training_results(train_losses, test_losses, test_accuracies):
     # Save summary statistics in high resolution
     plt.savefig('visualizations/training_summary_stats.png', dpi=300, bbox_inches='tight')
     plt.savefig('visualizations/training_summary_stats.pdf', format='pdf', bbox_inches='tight')
+    
+    # If test metrics are provided, create additional visualization plots
+    if test_metrics is not None:
+        # Plot confusion matrix
+        if 'confusion_matrix' in test_metrics:
+            plt.figure(figsize=(8, 7), dpi=150)
+            try:
+                import seaborn as sns
+                cm = test_metrics['confusion_matrix']
+                # Create normalized confusion matrix
+                cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+                
+                # Create heatmap
+                sns.heatmap(cm_norm, annot=cm, fmt='d', cmap='Blues', 
+                           xticklabels=['Negative', 'Positive'],
+                           yticklabels=['Negative', 'Positive'])
+                plt.xlabel('Predicted Label')
+                plt.ylabel('True Label')
+                plt.title('Confusion Matrix', fontsize=16, fontweight='bold')
+                
+                # Save confusion matrix visualization
+                plt.tight_layout()
+                plt.savefig('visualizations/confusion_matrix.png', dpi=300, bbox_inches='tight')
+                plt.savefig('visualizations/confusion_matrix.pdf', format='pdf', bbox_inches='tight')
+            except Exception as e:
+                print(f"Could not plot confusion matrix: {e}")
+        
+        # Plot ROC curve
+        if 'roc_curve' in test_metrics and len(test_metrics['roc_curve'][0]) > 0:
+            plt.figure(figsize=(8, 8), dpi=150)
+            try:
+                fpr, tpr = test_metrics['roc_curve']
+                roc_auc = test_metrics.get('roc_auc', 0)
+                
+                plt.plot(fpr, tpr, color='darkorange', lw=2, 
+                         label=f'ROC curve (AUC = {roc_auc:.3f})')
+                plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+                plt.xlim([0.0, 1.0])
+                plt.ylim([0.0, 1.05])
+                plt.xlabel('False Positive Rate', fontsize=14)
+                plt.ylabel('True Positive Rate', fontsize=14)
+                plt.title('Receiver Operating Characteristic (ROC) Curve', fontsize=16, fontweight='bold')
+                plt.legend(loc="lower right", fontsize=12)
+                plt.grid(alpha=0.3)
+                
+                # Save ROC curve visualization
+                plt.tight_layout()
+                plt.savefig('visualizations/roc_curve.png', dpi=300, bbox_inches='tight')
+                plt.savefig('visualizations/roc_curve.pdf', format='pdf', bbox_inches='tight')
+            except Exception as e:
+                print(f"Could not plot ROC curve: {e}")
+        
+        # Plot Precision-Recall curve
+        if 'pr_curve' in test_metrics and len(test_metrics['pr_curve'][0]) > 0:
+            plt.figure(figsize=(8, 8), dpi=150)
+            try:
+                precision, recall = test_metrics['pr_curve']
+                pr_auc = test_metrics.get('pr_auc', 0)
+                
+                plt.plot(recall, precision, color='green', lw=2, 
+                         label=f'PR curve (AUC = {pr_auc:.3f})')
+                plt.xlabel('Recall', fontsize=14)
+                plt.ylabel('Precision', fontsize=14)
+                plt.title('Precision-Recall Curve', fontsize=16, fontweight='bold')
+                plt.legend(loc="best", fontsize=12)
+                plt.grid(alpha=0.3)
+                
+                # Save PR curve visualization
+                plt.tight_layout()
+                plt.savefig('visualizations/pr_curve.png', dpi=300, bbox_inches='tight')
+                plt.savefig('visualizations/pr_curve.pdf', format='pdf', bbox_inches='tight')
+            except Exception as e:
+                print(f"Could not plot Precision-Recall curve: {e}")
+                
+        # Plot all metrics in a single radar chart
+        plt.figure(figsize=(10, 10), dpi=150)
+        try:
+            # Get metrics for radar chart
+            metrics_keys = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']
+            metrics_values = [test_metrics.get(k, 0) for k in metrics_keys]
+            metrics_labels = ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'ROC AUC']
+            
+            # Create radar chart using polar plot
+            angles = np.linspace(0, 2*np.pi, len(metrics_labels), endpoint=False).tolist()
+            angles += angles[:1]  # Close the polygon
+            
+            metrics_values += metrics_values[:1]  # Close the polygon
+            
+            ax = plt.subplot(111, polar=True)
+            ax.plot(angles, metrics_values, 'o-', linewidth=2)
+            ax.fill(angles, metrics_values, alpha=0.25)
+            ax.set_thetagrids(np.degrees(angles[:-1]), metrics_labels, fontsize=12)
+            
+            # Set radial limits
+            ax.set_ylim(0, 1)
+            ax.set_rlabel_position(0)
+            plt.yticks([0.2, 0.4, 0.6, 0.8, 1.0], ["0.2", "0.4", "0.6", "0.8", "1.0"], 
+                      color="grey", size=10)
+            plt.title('Model Performance Metrics', fontsize=16, fontweight='bold', y=1.08)
+            
+            # Save radar chart visualization
+            plt.tight_layout()
+            plt.savefig('visualizations/metrics_radar.png', dpi=300, bbox_inches='tight')
+            plt.savefig('visualizations/metrics_radar.pdf', format='pdf', bbox_inches='tight')
+        except Exception as e:
+            print(f"Could not plot radar chart: {e}")
     
     # Terminal summary (more detailed now)
     print(f"\n{'='*40}")
@@ -497,10 +721,26 @@ def plot_training_results(train_losses, test_losses, test_accuracies):
         print(f"Loss Improvement: {loss_improvement:.2f}%")
     print(f"Best Accuracy: {best_accuracy:.2f}%")
     
+    # Add test metrics to terminal summary if provided
+    if test_metrics is not None:
+        print(f"\n{'='*40}")
+        print(f"TEST METRICS")
+        print(f"{'='*40}")
+        print(f"Accuracy: {test_metrics.get('accuracy', 'N/A'):.4f}")
+        print(f"Precision: {test_metrics.get('precision', 'N/A'):.4f}")
+        print(f"Recall: {test_metrics.get('recall', 'N/A'):.4f}")
+        print(f"F1 Score: {test_metrics.get('f1', 'N/A'):.4f}")
+        print(f"ROC AUC: {test_metrics.get('roc_auc', 'N/A'):.4f}")
+        print(f"PR AUC: {test_metrics.get('pr_auc', 'N/A'):.4f}")
+    
     print(f"\nTraining visualization saved to 'visualizations/battle_predictor_training.png/pdf'")
     print(f"Summary statistics saved to 'visualizations/training_summary_stats.png/pdf'")
     
+    if test_metrics is not None:
+        print(f"Additional metrics visualizations saved to 'visualizations/' directory")
+    
     return
+
 
 def load_model(model_path='models/best_battle_predictor.pt', input_size=None):
     """Load a trained model from disk"""
@@ -639,6 +879,7 @@ def main():
         model = train_lstm_model(train_loader, test_loader, input_size)
         
         print("\nTraining complete! Model saved as 'best_battle_predictor.pt'")
+        print("Model metrics and visualizations saved in the 'visualizations' directory")
         
     except Exception as e:
         print(f"An error occurred: {e}")

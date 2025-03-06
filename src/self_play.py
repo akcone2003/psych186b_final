@@ -560,4 +560,208 @@ class SelfPlaySimulation:
             blue_health = sum(unit.hp / unit.max_hp for unit in self.env.friendly_units if unit.is_alive())
             red_health = sum(enemy.hp / enemy.max_hp for enemy in self.env.enemies if enemy.is_alive())
             
-            blue_strength = blu
+            blue_strength = blue_alive + blue_health * 0.5
+            red_strength = red_alive + red_health * 0.5
+            
+            if blue_strength > red_strength * 1.5:
+                outcome = "blue_advantage"
+            elif red_strength > blue_strength * 1.5:
+                outcome = "red_advantage"
+            else:
+                outcome = "ongoing"
+        
+        return {
+            'result': outcome,
+            'blue_remaining': blue_alive,
+            'blue_total': len(self.env.friendly_units),
+            'red_remaining': red_alive,
+            'red_total': len(self.env.enemies)
+        }
+    
+    def _update_stats(self, result, steps):
+        """
+        Update battle statistics with improved survival rate tracking
+        
+        Parameters:
+            result: Battle result dictionary
+            steps: Number of steps the battle took
+        """
+        if result['result'] == 'blue_victory' or result['result'] == 'blue_advantage':
+            self.battle_stats['wins_blue'] += 1
+        elif result['result'] == 'red_victory' or result['result'] == 'red_advantage':
+            self.battle_stats['wins_red'] += 1
+        elif result['result'] == 'draw':
+            self.battle_stats['draws'] += 1
+        else:  # Handle 'ongoing' outcomes by classifying based on relative strength
+            # If we reach max steps, force a classification based on unit count/health
+            blue_remaining = result['blue_remaining'] / result['blue_total']
+            red_remaining = result['red_remaining'] / result['red_total']
+            
+            if blue_remaining > red_remaining * 1.1:
+                self.battle_stats['wins_blue'] += 1
+            elif red_remaining > blue_remaining * 1.1:
+                self.battle_stats['wins_red'] += 1
+            else:
+                self.battle_stats['draws'] += 1
+        
+        # Update steps
+        self.battle_stats['avg_steps'].append([steps])
+        
+        # Update units remaining - calculate survival rates for both sides in ALL battles
+        blue_survival_rate = result['blue_remaining'] / result['blue_total']
+        red_survival_rate = result['red_remaining'] / result['red_total']
+        
+        # If Blue won, then Red's survival rate should be 0 (all Red units were eliminated)
+        # If Red won, then Blue's survival rate should be 0 (all Blue units were eliminated)
+        if result['result'] == 'blue_victory':
+            red_survival_rate = 0.0  # All Red units were eliminated
+        elif result['result'] == 'red_victory':
+            blue_survival_rate = 0.0  # All Blue units were eliminated
+        
+        # Now track the survival rates that reflect the actual battle outcome
+        self.battle_stats['blue_units_remaining'].append(blue_survival_rate)
+        self.battle_stats['red_units_remaining'].append(red_survival_rate)
+    
+    def _render_and_save(self, step, is_final=False):
+        """
+        Render the battle state and save as an image
+        
+        Parameters:
+            step: Current step number
+            is_final: Whether this is the final state
+        """
+        if not self.save_visualizations:
+            return
+        
+        # Only save the final battle state
+        if not is_final:
+            return
+        
+        try:
+            # Create filename - use timestamps for uniqueness
+            import time
+            battle_id = int(time.time()) % 10000  # Last 4 digits of timestamp
+            
+            filename = f"{self.visualization_dir}/battle_{battle_id}_final.png"
+            
+            # Render using the environment's render method
+            fig = self.env.render(mode='human', save_path=filename)
+            
+            # Close the figure to prevent memory leaks
+            plt.close(fig)
+            
+            print(f"Final battle state saved to {filename}")
+            
+        except Exception as e:
+            print(f"Error saving visualization: {e}")
+    
+    def _visualize_stats(self, num_battles):
+        """
+        Visualize battle statistics
+        
+        Parameters:
+            num_battles: Total number of battles run
+        """
+        if not self.save_visualizations:
+            return
+        
+        try:
+            # Create a figure with two subplots
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+            
+            # Plot 1: Win rates
+            labels = ['Blue Wins', 'Red Wins', 'Draws']
+            sizes = [
+                self.battle_stats['wins_blue'],
+                self.battle_stats['wins_red'],
+                self.battle_stats['draws']
+            ]
+            colors = ['#3498db', '#e74c3c', '#95a5a6']
+            
+            ax1.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', 
+                   shadow=True, startangle=90)
+            ax1.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+            ax1.set_title('Battle Outcomes')
+            
+            # Plot 2: Average units remaining
+            categories = ['Blue', 'Red']
+            values = [
+                sum(self.battle_stats['blue_units_remaining']) / len(self.battle_stats['blue_units_remaining']) if self.battle_stats['blue_units_remaining'] else 0,
+                sum(self.battle_stats['red_units_remaining']) / len(self.battle_stats['red_units_remaining']) if self.battle_stats['red_units_remaining'] else 0
+            ]
+            
+            ax2.bar(categories, values, color=['#3498db', '#e74c3c'])
+            ax2.set_ylim(0, 1)
+            ax2.set_ylabel('Average Proportion of Units Remaining')
+            ax2.set_title('Unit Survival Rate')
+            
+            # Add value labels on top of bars
+            for i, v in enumerate(values):
+                ax2.text(i, v + 0.02, f'{v:.2f}', ha='center')
+            
+            # Add overall title
+            plt.suptitle(f'Self-Play Statistics ({num_battles} battles)')
+            
+            # Save figure
+            plt.tight_layout()
+            fig.subplots_adjust(top=0.88)  # Make room for suptitle
+            
+            stats_file = f"{self.visualization_dir}/battle_statistics.png"
+            plt.savefig(stats_file)
+            plt.close()
+            
+            print(f"Battle statistics visualization saved to {stats_file}")
+            
+        except Exception as e:
+            print(f"Error creating statistics visualization: {e}")
+
+
+def run_self_play_demo(model_path='models/best_battle_predictor.pt', num_battles=1, 
+                 max_enemies=3, terrain_type=None, weather_type=None,
+                 enable_artillery=False, enable_stealth=False):
+    """
+    Run a self-play demonstration
+    
+    Parameters:
+        model_path: Path to the trained model
+        num_battles: Number of battles to run
+        max_enemies: Maximum number of enemies per battle
+        terrain_type: Specific terrain type to use (None for random)
+        weather_type: Specific weather type to use (None for random)
+        enable_artillery: Whether to enable artillery units
+        enable_stealth: Whether to enable stealth units
+    """
+    # Create the self-play simulator with custom parameters
+    simulator = SelfPlaySimulation(
+        model_path=model_path, 
+        max_steps=50,
+        save_visualizations=True,
+        max_enemies=max_enemies,
+        terrain_type=terrain_type,
+        weather_type=weather_type,
+        enable_artillery=enable_artillery,
+        enable_stealth=enable_stealth
+    )
+    
+    # Run the specified number of battles
+    if num_battles == 1:
+        # Run a single battle with detailed logging
+        simulator.run_self_play_battle(log_steps=True, render_battle=True)
+    else:
+        # Run multiple battles with summary statistics
+        simulator.run_multiple_battles(num_battles=num_battles, log_individual=False)
+
+
+if __name__ == "__main__":
+    # If run directly, perform a self-play demonstration
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Self-Play Battlefield Simulation')
+    parser.add_argument('--model', type=str, default='models/best_battle_predictor.pt',
+                       help='Path to trained model')
+    parser.add_argument('--battles', type=int, default=1,
+                       help='Number of battles to run')
+    
+    args = parser.parse_args()
+    
+    run_self_play_demo(model_path=args.model, num_battles=args.battles)
