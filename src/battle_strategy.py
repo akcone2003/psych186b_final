@@ -112,7 +112,7 @@ def get_optimal_positioning(model, enemy_position, grid_size=10, action_set=[0, 
     
     
     # Helper to generate positions with various distances to enemy
-    def generate_position_candidates(enemy_pos, grid_size, count=10):
+    def generate_position_candidates(enemy_pos, grid_size, count=30):
         positions = []
         enemy_x, enemy_y = enemy_pos
         
