@@ -13,6 +13,7 @@ import argparse
 import os
 import sys
 import time
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Try importing from both module styles to be flexible
 try:

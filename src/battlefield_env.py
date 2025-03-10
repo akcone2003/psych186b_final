@@ -226,6 +226,7 @@ class Unit:
         
         return visibility
     
+    
     def calculate_damage(self, target, critical_hit=False):
         """
         Calculate damage against target considering type advantages
@@ -947,6 +948,22 @@ class BattlefieldEnv(gym.Env):
             terrain_cell = self.terrain_data[x][y]
             return self._identify_terrain(terrain_cell)
         return "Plains"  # Default if out of bounds
+    
+    def calculate_reward(self):
+        """Calculate reward for the current state more precisely for RL"""
+        # Base reward depends on unit health
+        friendly_health = sum(unit.hp / unit.max_hp for unit in self.friendly_units if unit.is_alive())
+        enemy_health = sum(enemy.hp / enemy.max_hp for enemy in self.enemies if enemy.is_alive())
+        
+        # Normalize by unit count
+        friendly_count = max(1, sum(1 for unit in self.friendly_units if unit.is_alive()))
+        enemy_count = max(1, sum(1 for enemy in self.enemies if enemy.is_alive()))
+        
+        friendly_health_avg = friendly_health / friendly_count
+        enemy_health_avg = enemy_health / enemy_count
+    
+        # Calculate reward based on relative health and unit count advantage
+        return friendly_health_avg - enemy_health_avg + 0.1 * (friendly_count - enemy_count)
     
     def step(self, actions):
         """

@@ -28,7 +28,7 @@ try:
     from battlefield_env import run_simulation, BattlefieldEnv, ATTACK_RANGES, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
     from lstm_model import main as train_model, load_model, predict_battle_outcome
     from battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
-    from self_play import SelfPlaySimulation
+    from self_play import SelfPlaySimulation, SelfPlayRL
     # Import visualization if available
     try:
         from battlefield_visuals import show_latest_battlefield
@@ -41,7 +41,7 @@ except ImportError:
     from src.battlefield_env import run_simulation, BattlefieldEnv, ATTACK_RANGES, UnitType, ActionType, TERRAIN_TYPES, WEATHER_CONDITIONS
     from src.lstm_model import main as train_model, load_model, predict_battle_outcome
     from src.battle_strategy import get_optimal_actions, get_optimal_positioning, generate_battle_heatmap, visualize_battle_heatmap
-    from src.self_play import SelfPlaySimulation
+    from src.self_play import SelfPlaySimulation, SelfPlayRL
     # Import visualization if available
     try:
         from src.battlefield_visuals import show_latest_battlefield
@@ -348,7 +348,23 @@ class BattlefieldGUI(tk.Tk):
         # Make text widget expand
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
+        # Add reinforcement learning section
+        rl_frame = ttk.LabelFrame(self.self_play_tab, text="Reinforcement Learning")
+        rl_frame.grid(row=3, column=0, padx=10, pady=10, sticky='nw')
         
+        # RL settings controls
+        ttk.Label(rl_frame, text="RL Cycles:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        self.rl_cycles_var = tk.IntVar(value=5)
+        ttk.Spinbox(rl_frame, from_=1, to=50, textvariable=self.rl_cycles_var, width=5).grid(row=0, column=1, padx=5, pady=5, sticky='w')
+        
+        ttk.Label(rl_frame, text="Games per Cycle:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        self.rl_games_var = tk.IntVar(value=20)
+        ttk.Spinbox(rl_frame, from_=5, to=100, textvariable=self.rl_games_var, width=5).grid(row=1, column=1, padx=5, pady=5, sticky='w')
+        
+        # Run button for RL training
+        ttk.Button(rl_frame, text="Run RL Training", command=self.run_rl_training).grid(row=2, column=0, columnspan=2, padx=5, pady=10)
+
+            
         # Display welcome text
         welcome_text = """Welcome to Model Self-Play
 
@@ -375,6 +391,67 @@ class BattlefieldGUI(tk.Tk):
     """
         self.self_play_results.insert(tk.END, welcome_text)
 
+    def run_rl_training(self):
+        """Run reinforcement learning training to improve the model"""
+        if self.model is None:
+            messagebox.showerror("Error", "No model loaded. Please train or load a model first.")
+            return
+        
+        # Get parameters from GUI
+        cycles = self.rl_cycles_var.get()
+        games_per_cycle = self.rl_games_var.get()
+        
+        # Update status
+        self.status_var.set("Starting reinforcement learning training...")
+        self.update()
+        
+        # Function to run in a separate thread
+        def run_training():
+            try:
+                
+                # Create RL system
+                rl_system = SelfPlayRL(model_path="models/best_battle_predictor.pt")
+                
+                # Run improvement cycles
+                self.queue.put(("status", "Running RL improvement cycles..."))
+                stats = rl_system.run_rl_improvement_cycle(
+                    cycles=cycles,
+                    games_per_cycle=games_per_cycle,
+                    validation_games=10,
+                    save_visualizations=True
+                )
+                
+                # Update status
+                self.queue.put(("status", "RL training complete"))
+                
+                # Show results
+                if stats['validation_scores']:
+                    best_idx = np.argmax(stats['validation_scores'])
+                    best_cycle = best_idx + 1
+                    best_score = stats['validation_scores'][best_idx]
+                    
+                    result_text = f"RL Training Results\n\n"
+                    result_text += f"Best model found at cycle {best_cycle}\n"
+                    result_text += f"Validation score: {best_score:.4f}\n"
+                    
+                    # Queue results for display
+                    self.queue.put(("self_play_result", result_text))
+                    
+                    # Load the improved model
+                    self.model = load_model("models/rl_improved_model.pt")
+                    self.queue.put(("status", "Improved model loaded"))
+                
+            except Exception as e:
+                # Log error
+                self.queue.put(("status", f"Error in RL training: {str(e)}"))
+                self.queue.put(("log", f"RL training error: {str(e)}"))
+                import traceback
+                traceback.print_exc()
+        
+        # Run in a separate thread
+        thread = threading.Thread(target=run_training)
+        thread.daemon = True
+        thread.start()
 
 
     def _set_multiple_battles_and_run(self):
